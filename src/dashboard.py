@@ -318,9 +318,10 @@ HTML_PAGE = """<!DOCTYPE html>
     width: 10px; height: 10px; border-radius: 50%;
     display: inline-block; flex-shrink: 0;
   }
-  .dot.green { background: #22c55e; box-shadow: 0 0 6px #22c55e80; }
-  .dot.red { background: #ef4444; box-shadow: 0 0 6px #ef444480; }
+  .dot.green  { background: #22c55e; box-shadow: 0 0 6px #22c55e80; }
+  .dot.red    { background: #ef4444; box-shadow: 0 0 6px #ef444480; }
   .dot.yellow { background: #eab308; box-shadow: 0 0 6px #eab30880; }
+  .dot.grey   { background: #6b7280; }
   .recent { background: #16213e; border-radius: 12px; padding: 20px;
     border: 1px solid #1a1a3e; margin-bottom: 24px; }
   .recent h2 { font-size: 1rem; color: #a78bfa; margin-bottom: 12px; }
@@ -406,9 +407,9 @@ HTML_PAGE = """<!DOCTYPE html>
 <p class="subtitle">Monitoring Dashboard — auto-refreshes every 30s</p>
 
 <div class="status-row" id="statuses">
-  <div class="status"><span class="dot" id="dot-db"></span><span id="lbl-db">PostgreSQL</span><span class="error-msg" id="err-db"></span></div>
-  <div class="status"><span class="dot" id="dot-ollama"></span><span id="lbl-ollama">Ollama</span><button class="btn hidden" id="btn-ollama" onclick="startOllama()">Start</button></div>
-  <div class="status"><span class="dot" id="dot-model"></span><span id="lbl-model">Embedding Model</span></div>
+  <div class="status"><span class="dot grey" id="dot-db"></span><span id="lbl-db">PostgreSQL</span><span class="error-msg" id="err-db"></span></div>
+  <div class="status"><span class="dot grey" id="dot-ollama"></span><span id="lbl-ollama">Ollama</span><button class="btn hidden" id="btn-ollama" onclick="startOllama()">Start</button></div>
+  <div class="status"><span class="dot grey" id="dot-model"></span><span id="lbl-model">Embedding Model</span></div>
 </div>
 
 <div class="actions-row">
@@ -514,7 +515,10 @@ function dot(el, ok) {
 
 async function fetchStats() {
   try {
-    const r = await fetch('/api/stats');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    const r = await fetch('/api/stats', { signal: ctrl.signal });
+    clearTimeout(timer);
     const s = await r.json();
 
     dot(document.getElementById('dot-db'), s.db_ok);
@@ -524,7 +528,7 @@ async function fetchStats() {
     document.getElementById('lbl-db').textContent =
       s.db_ok ? 'PostgreSQL' : 'PostgreSQL — DOWN';
     document.getElementById('err-db').textContent =
-      (!s.db_ok && s.db_error) ? s.db_error.split('\n')[0] : '';
+      (!s.db_ok && s.db_error) ? s.db_error.split('\\n')[0] : '';
     document.getElementById('lbl-ollama').textContent =
       s.ollama_ok ? 'Ollama' : 'Ollama — DOWN';
     document.getElementById('btn-ollama').classList.toggle('hidden', s.ollama_ok || !s.can_start_ollama);
@@ -578,7 +582,12 @@ async function fetchStats() {
       'Last refresh: ' + new Date().toLocaleTimeString() + ' — auto-refresh 30s';
 
   } catch (e) {
-    document.getElementById('footer').textContent = 'Fetch error: ' + e.message;
+    const msg = e.name === 'AbortError' ? 'timed out' : e.message;
+    document.getElementById('footer').textContent =
+      'Service unreachable (' + msg + ') — run: osm status';
+    ['dot-db', 'dot-ollama', 'dot-model'].forEach(id => {
+      document.getElementById(id).className = 'dot grey';
+    });
   }
 }
 

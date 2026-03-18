@@ -147,7 +147,9 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     if _pool is None:
         with _pool_lock:
             if _pool is None:
-                _pool = psycopg2.pool.ThreadedConnectionPool(1, 5, DATABASE_URL)
+                _pool = psycopg2.pool.ThreadedConnectionPool(
+                    1, 5, DATABASE_URL, connect_timeout=5
+                )
     return _pool
 
 

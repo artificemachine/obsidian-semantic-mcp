@@ -9,6 +9,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.3] — 2026-03-18
+
+### Fixed
+- Dashboard JS completely broken by bare `\n` in Python triple-quoted string (`s.db_error.split('\n')`) — caused silent JS parse failure on every page load (regression in 0.3.2)
+- Dashboard stats stuck on `—` / "Fetching…" forever when PostgreSQL is unreachable — DB connection pool now has `connect_timeout=5`
+- Dashboard fetch hangs indefinitely when services are down — `AbortController` timeout (15s) added; footer now shows `"Service unreachable — run: osm status"`
+- `osm init` wizard loops forever on invalid input — typing `q`, `quit`, `exit`, or `skip` now exits cleanly; prompt hints show `(q to quit)`
+
+### Added
+- Status indicator dots now start grey on page load (visible before first fetch completes)
+- `tests/test_dashboard_smoke.py` — offline JS/DOM static analysis + live HTTP smoke tests for the dashboard
+
+---
+
 ## [0.3.2] — 2026-03-18
 
 ### Fixed

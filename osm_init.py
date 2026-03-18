@@ -93,13 +93,17 @@ def prompt(question, default=None, choices=None, param_key=None):
         info(f"{question}: {_c('1', val)}  (from --{param_key.replace('_', '-')})")
         return val
 
+    _EXIT_WORDS = {"q", "quit", "exit", "skip"}
     hint = f" [{default}]" if default else ""
     if choices:
-        hint = f" ({'/'.join(choices)})"
+        hint = f" ({'/'.join(choices)}, q to quit)"
     while True:
         try:
             answer = input(f"  {question}{hint}: ").strip()
         except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        if answer.lower() in _EXIT_WORDS:
             print()
             sys.exit(0)
         if not answer and default is not None:
