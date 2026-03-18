@@ -406,7 +406,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <p class="subtitle">Monitoring Dashboard — auto-refreshes every 30s</p>
 
 <div class="status-row" id="statuses">
-  <div class="status"><span class="dot" id="dot-db"></span><span id="lbl-db">PostgreSQL</span></div>
+  <div class="status"><span class="dot" id="dot-db"></span><span id="lbl-db">PostgreSQL</span><span class="error-msg" id="err-db"></span></div>
   <div class="status"><span class="dot" id="dot-ollama"></span><span id="lbl-ollama">Ollama</span><button class="btn hidden" id="btn-ollama" onclick="startOllama()">Start</button></div>
   <div class="status"><span class="dot" id="dot-model"></span><span id="lbl-model">Embedding Model</span></div>
 </div>
@@ -523,6 +523,8 @@ async function fetchStats() {
 
     document.getElementById('lbl-db').textContent =
       s.db_ok ? 'PostgreSQL' : 'PostgreSQL — DOWN';
+    document.getElementById('err-db').textContent =
+      (!s.db_ok && s.db_error) ? s.db_error.split('\n')[0] : '';
     document.getElementById('lbl-ollama').textContent =
       s.ollama_ok ? 'Ollama' : 'Ollama — DOWN';
     document.getElementById('btn-ollama').classList.toggle('hidden', s.ollama_ok || !s.can_start_ollama);

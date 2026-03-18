@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.2] — 2026-03-18
+
+### Fixed
+- Dashboard: PostgreSQL status now shows the actual error message (e.g. "authentication failed") instead of just "DOWN"
+
+---
+
 ## [0.3.1] — 2026-03-18
 
 ### Fixed
