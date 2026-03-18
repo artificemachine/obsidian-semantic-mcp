@@ -427,27 +427,45 @@ def write_env(vault, pg_password, ollama_url, ssh_params=None,
 
 # ── Claude Code CLI registration ──────────────────────────────────────────────
 
+def _claude_cli_already_registered() -> bool:
+    """Return True if obsidian-semantic is already in the MCP list."""
+    r = run(["claude", "mcp", "list"], check=False, capture=True)
+    return "obsidian-semantic" in (r.stdout or "")
+
+
 def register_claude_cli(entry):
     """
     Register the MCP server with Claude Code CLI via `claude mcp add --scope user`.
 
     This writes to $HOME/.claude.json (separate from claude_desktop_config.json).
     Silently skips if the `claude` CLI is not installed.
+
+    obsidian-semantic is a single global server — shared across all projects.
+    If it is already registered, this is a no-op with an informational message.
     """
     if not cmd_exists("claude"):
         return  # Claude Code CLI not installed — Desktop config is enough
 
+    if DRY_RUN:
+        cmd_args = entry.get("args", [])
+        env_pairs = [f"{k}={v}" for k, v in entry.get("env", {}).items()]
+        cli_cmd = ["claude", "mcp", "add", "--scope", "user"]
+        for pair in env_pairs:
+            cli_cmd += ["-e", pair]
+        cli_cmd += ["obsidian-semantic", "--", entry["command"]] + cmd_args
+        _dry(" ".join(str(a) for a in cli_cmd))
+        return
+
+    if _claude_cli_already_registered():
+        ok("Claude Code CLI: obsidian-semantic already registered — global, shared across all projects")
+        return
+
     cmd_args = entry.get("args", [])
     env_pairs = [f"{k}={v}" for k, v in entry.get("env", {}).items()]
-
     cli_cmd = ["claude", "mcp", "add", "--scope", "user"]
     for pair in env_pairs:
         cli_cmd += ["-e", pair]
     cli_cmd += ["obsidian-semantic", "--", entry["command"]] + cmd_args
-
-    if DRY_RUN:
-        _dry(" ".join(str(a) for a in cli_cmd))
-        return
 
     r = run(cli_cmd, check=False)
     if r.returncode == 0:
@@ -480,6 +498,9 @@ def update_claude_config(entry):
             cfg = json.loads(path.read_text())
         except json.JSONDecodeError:
             warn(f"Could not parse {path} — mcpServers section will be reset")
+    if cfg.get("mcpServers", {}).get("obsidian-semantic"):
+        ok(f"Claude Desktop: obsidian-semantic already configured — global, shared across all projects")
+        return
     cfg.setdefault("mcpServers", {})["obsidian-semantic"] = entry
     # Show the full merged config so the user can see what other entries are preserved
     pretty = json.dumps(cfg, indent=2)

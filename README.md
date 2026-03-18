@@ -38,6 +38,8 @@ uv run osm init
 > **Tip:** Run `uv run osm init --dry-run` first to preview every action without making any changes.
 >
 > `scripts/osm` is a direct wrapper — if you prefer not to use `uv run`, `scripts/osm init` works identically without activating the venv.
+>
+> **One server, all projects:** `obsidian-semantic` is registered globally — running `osm init` from any other project is safe and idempotent. If already configured, it skips registration and informs you.
 
 The wizard detects your OS and asks which installation mode you want:
 

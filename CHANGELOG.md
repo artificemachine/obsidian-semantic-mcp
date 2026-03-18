@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.1] — 2026-03-18
+
+### Fixed
+- `osm init` no longer shows a false warning when `obsidian-semantic` MCP server is already registered — re-running from any project is now fully idempotent
+- Claude Desktop config skips update if `obsidian-semantic` already present
+
+### Changed
+- `obsidian-semantic` is treated as a single global server shared across all projects — re-running `osm init` detects existing registration and informs the user instead of failing
+
+---
+
 ## [0.3.0] — 2026-03-15
 
 ### Added
