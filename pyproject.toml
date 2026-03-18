@@ -1,6 +1,6 @@
 [project]
 name = "obsidian-semantic-mcp"
-version = "0.3.2"
+version = "0.3.3"
 description = "Semantic search MCP server for Obsidian vaults"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -37,4 +37,9 @@ dev = [
 osm = "osm_init:main"
 
 [tool.pytest.ini_options]
-testpaths = ["tests/test_unit.py", "tests/test_osm_init.py", "tests/test_osm_commands.py"]
+testpaths = [
+    "tests/test_unit.py",
+    "tests/test_osm_init.py",
+    "tests/test_osm_commands.py",
+    "tests/test_dashboard_smoke.py",
+]

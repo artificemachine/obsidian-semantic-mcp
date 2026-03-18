@@ -40,6 +40,8 @@ uv run osm init
 > `scripts/osm` is a direct wrapper — if you prefer not to use `uv run`, `scripts/osm init` works identically without activating the venv.
 >
 > **One server, all projects:** `obsidian-semantic` is registered globally — running `osm init` from any other project is safe and idempotent. If already configured, it skips registration and informs you.
+>
+> **Exit the wizard at any prompt:** type `q`, `quit`, `exit`, or `skip` — or press `Ctrl+C`.
 
 The wizard detects your OS and asks which installation mode you want:
 
@@ -211,10 +213,11 @@ obsidian-semantic-mcp/
 │   ├── server.py          # MCP server — semantic search + vault CRUD (10 tools)
 │   └── dashboard.py       # Monitoring dashboard (http://localhost:8484)
 ├── tests/
-│   ├── test_unit.py       # Unit tests (54 tests, no real DB/Ollama needed)
-│   ├── test_osm_init.py   # Unit tests for the osm CLI wizard
-│   ├── test_setup.py      # Prerequisites checker (deps, DB, Ollama) — run directly
-│   └── test_e2e.py        # End-to-end MCP protocol test — run directly
+│   ├── test_unit.py            # Unit tests (no real DB/Ollama needed)
+│   ├── test_osm_init.py        # Unit tests for the osm CLI wizard
+│   ├── test_dashboard_smoke.py # Dashboard static analysis + live HTTP smoke tests
+│   ├── test_setup.py           # Prerequisites checker (deps, DB, Ollama) — run directly
+│   └── test_e2e.py             # End-to-end MCP protocol test — run directly
 ├── osm_init.py            # Interactive setup wizard (used by scripts/osm)
 ├── Dockerfile             # Python 3.13 + uv
 ├── docker-compose.yml     # Full stack: postgres, ollama, server, dashboard
@@ -327,6 +330,20 @@ uv run pytest -q
 ```
 
 Runs 188 fast unit tests covering embedding, search, vault path safety, connection pool, and the osm CLI wizard.
+
+### `test_dashboard_smoke.py` — Dashboard health checks (Docker stack)
+
+Offline static analysis (always runs — no services needed) + live HTTP smoke tests (auto-skipped when the dashboard is unreachable).
+
+```bash
+# Offline + live (stack must be running)
+uv run pytest tests/test_dashboard_smoke.py -v
+
+# Target a remote instance
+DASHBOARD_URL=http://host:8484 uv run pytest tests/test_dashboard_smoke.py -v
+```
+
+Checks: JS string safety, DOM element completeness, `/api/stats` schema, service health, response time, and routing.
 
 ### `test_setup.py` — Prerequisites check (native installs)
 
