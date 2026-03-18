@@ -20,6 +20,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
+      # TODO: set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in
+      # GitHub → Settings → Secrets and variables → Actions
+      # then re-trigger: gh workflow run docker-hub.yml --ref v0.3.1
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
