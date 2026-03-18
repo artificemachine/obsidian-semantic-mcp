@@ -32,6 +32,20 @@ DASH_PORT   = int(os.environ.get("DASHBOARD_PORT", "8484"))
 
 DATABASE_URL = build_dsn()
 
+
+def _read_version() -> str:
+    try:
+        toml = (Path(__file__).parent.parent / "pyproject.toml").read_text()
+        for line in toml.splitlines():
+            if line.startswith("version"):
+                return line.split("=", 1)[1].strip().strip('"')
+    except Exception:
+        pass
+    return "dev"
+
+
+APP_VERSION = _read_version()
+
 _reindex_lock = threading.Lock()
 
 # Ollama health cache: (result_dict, expiry_timestamp)
@@ -404,7 +418,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <body>
 
 <h1>Obsidian Semantic MCP</h1>
-<p class="subtitle">Monitoring Dashboard — auto-refreshes every 30s</p>
+<p class="subtitle">Monitoring Dashboard {{VERSION}} — auto-refreshes every 30s</p>
 
 <div class="status-row" id="statuses">
   <div class="status"><span class="dot grey" id="dot-db"></span><span id="lbl-db">PostgreSQL</span><span class="error-msg" id="err-db"></span></div>
@@ -692,6 +706,8 @@ setInterval(fetchStats, 30000);
 </script>
 </body>
 </html>"""
+
+HTML_PAGE = HTML_PAGE.replace("{{VERSION}}", f"v{APP_VERSION}")
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
