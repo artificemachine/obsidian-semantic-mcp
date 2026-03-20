@@ -89,8 +89,8 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       EMBEDDING_MODEL: nomic-embed-text
     volumes:
-      - ${OBSIDIAN_VAULT:-.}:/vault:ro
-      # - /path/to/vault2:/vault2:ro  # add for multi-vault
+      - ${OBSIDIAN_VAULT:-.}:/vault
+      # - /path/to/vault2:/vault2  # add for multi-vault
     # stdio transport — Claude Desktop connects via `docker exec`
     stdin_open: true
     healthcheck:

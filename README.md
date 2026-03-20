@@ -273,8 +273,8 @@ Or in docker-compose.yml (uncomment the multi-vault lines):
 environment:
   OBSIDIAN_VAULTS: /vault1,/vault2   # multi-vault
 volumes:
-  - /path/to/vault1:/vault1:ro
-  - /path/to/vault2:/vault2:ro
+  - /path/to/vault1:/vault1
+  - /path/to/vault2:/vault2
 ```
 
 When using multiple vaults, the `search_vault` MCP tool gains a `vault` parameter to filter results by vault name. The dashboard also shows a vault selector. Each vault is watched and indexed independently.

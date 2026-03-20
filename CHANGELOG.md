@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.4] — 2026-03-20
+
+### Changed
+- Vault volume mounts no longer forced read-only (`:ro` removed) — enables write-back features
+
+### Fixed
+- README multi-vault example now matches docker-compose.yml (removed stale `:ro` flags)
+
+---
+
 ## [0.3.3] — 2026-03-18
 
 ### Fixed
