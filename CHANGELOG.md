@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.0] — 2026-03-22
+
+### Added
+- Multi-vault support in setup wizard — collect multiple vault paths interactively
+- `docker-compose.override.yml` auto-generated for multi-vault Docker volume mounts
+- `OBSIDIAN_VAULTS` env var written to `.env` when multiple vaults selected
+
+---
+
 ## [0.4.0] — 2026-03-22
 
 ### Added

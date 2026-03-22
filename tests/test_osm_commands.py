@@ -318,31 +318,64 @@ class TestUpdateClaudeConfig:
 class TestPromptVault:
     def test_from_param_existing_dir(self, tmp_path):
         osm_init._PARAMS["vault"] = str(tmp_path)
-        assert osm_init.prompt_vault() == str(tmp_path)
+        result = osm_init.prompt_vault()
+        assert result == [str(tmp_path)]
 
     def test_from_param_missing_dir_exits(self, tmp_path):
         osm_init._PARAMS["vault"] = str(tmp_path / "no-such-dir")
         with pytest.raises(SystemExit):
             osm_init.prompt_vault()
 
-    def test_from_env_confirm_yes(self, tmp_path, monkeypatch):
+    def test_from_env_confirm_yes_single(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OBSIDIAN_VAULT", str(tmp_path))
-        monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: True)
-        assert osm_init.prompt_vault() == str(tmp_path)
+        # confirm "Use this vault?" → yes, "Add more vaults?" → no
+        confirms = iter([True, False])
+        monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: next(confirms))
+        result = osm_init.prompt_vault()
+        assert result == [str(tmp_path)]
 
     def test_from_env_confirm_no_prompts_interactively(self, tmp_path, monkeypatch):
         new_vault = tmp_path / "newvault"
         new_vault.mkdir()
         monkeypatch.setenv("OBSIDIAN_VAULT", "/nonexistent")
+        # confirm "Use this vault?" → no
         monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: False)
         monkeypatch.setattr(osm_init, "prompt", lambda *a, **kw: str(new_vault))
-        assert osm_init.prompt_vault() == str(new_vault)
+        result = osm_init.prompt_vault()
+        assert result == [str(new_vault)]
 
     def test_retries_until_valid_dir(self, tmp_path, monkeypatch):
         monkeypatch.delenv("OBSIDIAN_VAULT", raising=False)
-        attempts = iter(["/does/not/exist", str(tmp_path)])
+        attempts = iter(["/does/not/exist", str(tmp_path), "n"])
         monkeypatch.setattr(osm_init, "prompt", lambda *a, **kw: next(attempts))
-        assert osm_init.prompt_vault() == str(tmp_path)
+        monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: False)
+        result = osm_init.prompt_vault()
+        assert result == [str(tmp_path)]
+
+    def test_multi_vault_from_env(self, tmp_path, monkeypatch):
+        v1 = tmp_path / "vault1"
+        v2 = tmp_path / "vault2"
+        v1.mkdir()
+        v2.mkdir()
+        monkeypatch.setenv("OBSIDIAN_VAULTS", f"{v1},{v2}")
+        monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: True)
+        result = osm_init.prompt_vault()
+        assert result == [str(v1), str(v2)]
+
+    def test_multi_vault_interactive(self, tmp_path, monkeypatch):
+        v1 = tmp_path / "vault1"
+        v2 = tmp_path / "vault2"
+        v1.mkdir()
+        v2.mkdir()
+        monkeypatch.delenv("OBSIDIAN_VAULT", raising=False)
+        monkeypatch.delenv("OBSIDIAN_VAULTS", raising=False)
+        prompts = iter([str(v1), str(v2)])
+        monkeypatch.setattr(osm_init, "prompt", lambda *a, **kw: next(prompts))
+        # "Add more vaults?" → yes, "Add another vault?" → no
+        confirms = iter([True, False])
+        monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: next(confirms))
+        result = osm_init.prompt_vault()
+        assert result == [str(v1), str(v2)]
 
 
 # ── prompt_persistent_storage ─────────────────────────────────────────────────

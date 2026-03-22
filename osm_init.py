@@ -120,7 +120,24 @@ def confirm(question, default="y", param_key=None):
     return prompt(question, default=default, choices=["y", "n"], param_key=param_key).lower() == "y"
 
 
+def _prompt_single_vault():
+    """Prompt for a single vault path interactively. Returns resolved path string."""
+    while True:
+        raw = prompt("Absolute path to your Obsidian vault")
+        p = Path(raw).expanduser().resolve()
+        if p.is_dir():
+            valid, msg = _validate_vault(str(p))
+            if valid:
+                ok(msg)
+            else:
+                warn(msg)
+            return str(p)
+        fail(f"Directory not found: {p}")
+
+
 def prompt_vault():
+    """Prompt for one or more vault paths. Returns a list of path strings."""
+    # --vault flag: single vault, no interactive multi-vault prompt
     if "vault" in _PARAMS:
         p = Path(_PARAMS["vault"]).expanduser().resolve()
         if not p.is_dir():
@@ -131,30 +148,53 @@ def prompt_vault():
         if valid:
             ok(msg)
         else:
-            warn(msg)  # --vault flag implies user intent; warn but don't block
-        return str(p)
+            warn(msg)
+        return [str(p)]
+
+    # Check existing env vars
+    existing_multi = os.environ.get("OBSIDIAN_VAULTS", "")
     existing = os.environ.get("OBSIDIAN_VAULT", "")
     print()
-    if existing:
+
+    if existing_multi:
+        paths = [v.strip() for v in existing_multi.split(",") if v.strip()]
+        info(f"OBSIDIAN_VAULTS is already set: {', '.join(paths)}")
+        if confirm("Use these vaults?"):
+            for v in paths:
+                valid, msg = _validate_vault(v)
+                if valid:
+                    ok(msg)
+                else:
+                    warn(msg)
+            return paths
+    elif existing:
         info(f"OBSIDIAN_VAULT is already set: {existing}")
         if confirm("Use this vault?"):
             valid, msg = _validate_vault(existing)
             if valid:
                 ok(msg)
             else:
-                warn(msg)  # warn only; user explicitly chose to re-use this path
-            return existing
-    while True:
-        raw = prompt("Absolute path to your Obsidian vault")
-        p = Path(raw).expanduser().resolve()
-        if p.is_dir():
-            valid, msg = _validate_vault(str(p))
-            if valid:
-                ok(msg)
-            else:
-                warn(msg)  # warn only; user just typed this path, trust their intent
-            return str(p)
-        fail(f"Directory not found: {p}")
+                warn(msg)
+            if confirm("Add more vaults?", default="n"):
+                vaults = [existing]
+                while True:
+                    v = _prompt_single_vault()
+                    vaults.append(v)
+                    if not confirm("Add another vault?", default="n"):
+                        break
+                return vaults
+            return [existing]
+
+    # Fresh prompt — collect first vault, then offer to add more
+    v = _prompt_single_vault()
+    vaults = [v]
+    if confirm("Add more vaults?", default="n"):
+        while True:
+            v = _prompt_single_vault()
+            vaults.append(v)
+            if not confirm("Add another vault?", default="n"):
+                break
+    return vaults
 
 
 def prompt_pg_password():
@@ -388,6 +428,8 @@ def write_env(vault, pg_password, ollama_url, ssh_params=None,
     """
     Write .env in the project root at runtime. This file is gitignored.
 
+    vault may be a string (single vault) or list of strings (multi-vault).
+
     ssh_params, if provided, is a dict with keys:
       user, host, remote_port, local_port, key_path (optional)
     These are stored as OSM_SSH_* vars so `osm tunnel` can reconnect.
@@ -396,11 +438,20 @@ def write_env(vault, pg_password, ollama_url, ssh_params=None,
     OLLAMA_DATA_PATH so Docker Compose uses bind mounts instead of named volumes.
     """
     env_path = PROJECT_ROOT / ".env"
-    lines = [
-        f"OBSIDIAN_VAULT={vault}",
-        f"POSTGRES_PASSWORD={pg_password}",
-        f"OLLAMA_URL={ollama_url}",
-    ]
+    vaults = vault if isinstance(vault, list) else [vault]
+    if len(vaults) > 1:
+        lines = [
+            f"OBSIDIAN_VAULTS={','.join(vaults)}",
+            f"OBSIDIAN_VAULT={vaults[0]}",
+            f"POSTGRES_PASSWORD={pg_password}",
+            f"OLLAMA_URL={ollama_url}",
+        ]
+    else:
+        lines = [
+            f"OBSIDIAN_VAULT={vaults[0]}",
+            f"POSTGRES_PASSWORD={pg_password}",
+            f"OLLAMA_URL={ollama_url}",
+        ]
     if pgdata_path:
         lines.append(f"PGDATA_PATH={pgdata_path}")
     if ollama_data_path:
@@ -535,14 +586,20 @@ def _docker_entry():
 
 
 def _native_entry(vault, db_url):
-    """Claude Desktop config entry for native install."""
+    """Claude Desktop config entry for native install.
+
+    vault may be a string or list of strings.
+    """
+    vaults = vault if isinstance(vault, list) else [vault]
+    env = {"DATABASE_URL": db_url}
+    if len(vaults) > 1:
+        env["OBSIDIAN_VAULTS"] = ",".join(vaults)
+    else:
+        env["OBSIDIAN_VAULT"] = vaults[0]
     return {
         "command": str(PROJECT_ROOT / ".venv" / "bin" / "python3"),
         "args": [str(PROJECT_ROOT / "src" / "server.py")],
-        "env": {
-            "OBSIDIAN_VAULT": vault,
-            "DATABASE_URL": db_url,
-        },
+        "env": env,
     }
 
 
@@ -553,6 +610,52 @@ def compose(args, env=None):
         ["docker", "compose", "--project-directory", str(PROJECT_ROOT)] + args,
         env=env,
     )
+
+
+def _write_compose_override(vaults):
+    """Generate docker-compose.override.yml for multi-vault volume mounts."""
+    if len(vaults) <= 1:
+        override = PROJECT_ROOT / "docker-compose.override.yml"
+        if override.exists():
+            override.unlink()
+        return
+    container_paths = []
+    vol_lines = []
+    for v in vaults:
+        name = Path(v).name
+        container_path = f"/{name}"
+        container_paths.append(container_path)
+        vol_lines.append(f"      - {v}:{container_path}")
+    vol_block = "\n".join(vol_lines)
+    # Dashboard mounts are read-only
+    vol_ro_lines = [f"{l}:ro" for l in vol_lines]
+    vol_ro_block = "\n".join(vol_ro_lines)
+    vaults_env = ",".join(container_paths)
+    content = (
+        "# Auto-generated by osm init for multi-vault support.\n"
+        "# Do not edit manually — re-run osm init to regenerate.\n"
+        "services:\n"
+        "  mcp-server:\n"
+        "    environment:\n"
+        f"      OBSIDIAN_VAULTS: {vaults_env}\n"
+        "    volumes:\n"
+        f"{vol_block}\n"
+        "  dashboard:\n"
+        "    environment:\n"
+        f"      OBSIDIAN_VAULTS: {vaults_env}\n"
+        "    volumes:\n"
+        f"{vol_ro_block}\n"
+    )
+    override_path = PROJECT_ROOT / "docker-compose.override.yml"
+    if DRY_RUN:
+        _dry(f"write {override_path}", "contents shown below")
+        print()
+        for line in content.splitlines():
+            print(f"    {_c('90', line)}")
+        print()
+        return
+    override_path.write_text(content)
+    ok(f"Wrote {override_path} with {len(vaults)} vault mounts")
 
 
 def compose_up(services=None, env=None):
@@ -599,7 +702,8 @@ def mode_native_macos():
         sys.exit(1)
     ok("Homebrew found")
 
-    vault = prompt_vault()
+    vaults = prompt_vault()
+    vault = vaults  # pass list to _native_entry
 
     # ── PostgreSQL ────────────────────────────────────────────────────────────
     header("PostgreSQL + pgvector")
@@ -674,15 +778,18 @@ def mode_full_docker():
     if not check_docker() or not check_compose():
         sys.exit(1)
 
-    vault = prompt_vault()
+    vaults = prompt_vault()
     pg_pw = prompt_pg_password()
     pgdata_path, ollama_data_path = prompt_persistent_storage(include_ollama=True)
-    write_env(vault, pg_pw, "http://ollama:11434",
+    write_env(vaults, pg_pw, "http://ollama:11434",
               pgdata_path=pgdata_path, ollama_data_path=ollama_data_path)
+    _write_compose_override(vaults)
 
     header("Starting all services")
-    env = {**os.environ, "OBSIDIAN_VAULT": vault, "POSTGRES_PASSWORD": pg_pw,
+    env = {**os.environ, "OBSIDIAN_VAULT": vaults[0], "POSTGRES_PASSWORD": pg_pw,
            "OLLAMA_URL": "http://ollama:11434", "COMPOSE_PROFILES": "full-docker"}
+    if len(vaults) > 1:
+        env["OBSIDIAN_VAULTS"] = ",".join(f"/{Path(v).name}" for v in vaults)
     if pgdata_path:
         env["PGDATA_PATH"] = pgdata_path
     if ollama_data_path:
@@ -715,13 +822,16 @@ def mode_docker_host_ollama():
     ollama_host = "host.docker.internal" if system in ("Darwin", "Windows") else "172.17.0.1"
     ollama_url  = f"http://{ollama_host}:11434"
 
-    vault = prompt_vault()
+    vaults = prompt_vault()
     pg_pw = prompt_pg_password()
     pgdata_path, _ = prompt_persistent_storage(include_ollama=False)
-    write_env(vault, pg_pw, ollama_url, pgdata_path=pgdata_path)
+    write_env(vaults, pg_pw, ollama_url, pgdata_path=pgdata_path)
+    _write_compose_override(vaults)
 
     header("Starting services (postgres, mcp-server, dashboard)")
-    env = {**os.environ, "OBSIDIAN_VAULT": vault, "POSTGRES_PASSWORD": pg_pw, "OLLAMA_URL": ollama_url}
+    env = {**os.environ, "OBSIDIAN_VAULT": vaults[0], "POSTGRES_PASSWORD": pg_pw, "OLLAMA_URL": ollama_url}
+    if len(vaults) > 1:
+        env["OBSIDIAN_VAULTS"] = ",".join(f"/{Path(v).name}" for v in vaults)
     if pgdata_path:
         env["PGDATA_PATH"] = pgdata_path
     compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
@@ -742,7 +852,8 @@ def _prompt_vault_location(ssh_user, ssh_host, key_path=None):
     """
     # --vault supplied → always local
     if "vault" in _PARAMS:
-        return prompt_vault()
+        vaults = prompt_vault()
+        return vaults[0] if len(vaults) == 1 else vaults
 
     # --vault-remote supplied → skip the menu and go straight to sshfs
     if "vault_remote" not in _PARAMS:
@@ -752,7 +863,8 @@ def _prompt_vault_location(ssh_user, ssh_host, key_path=None):
         print("    2)  On the remote machine  (will mount via sshfs)")
         loc = prompt("Choose", choices=["1", "2"])
         if loc == "1":
-            return prompt_vault()
+            vaults = prompt_vault()
+            return vaults[0] if len(vaults) == 1 else vaults
 
     # Remote vault via sshfs
     remote_vault = prompt("Path to vault on remote machine (absolute)",
@@ -839,6 +951,7 @@ def mode_docker_remote_ollama():
     # ── Vault path ────────────────────────────────────────────────────────────
     header("Obsidian vault")
     vault = _prompt_vault_location(ssh_user, remote_host, key_path)
+    vaults = vault if isinstance(vault, list) else [vault]
 
     # ── Write .env with SSH params for future reconnect ───────────────────────
     pg_pw = prompt_pg_password()
@@ -850,12 +963,15 @@ def mode_docker_remote_ollama():
         "local_port":  local_tunnel_port,
         "key_path":    key_path,
     }
-    write_env(vault, pg_pw, ollama_url, ssh_params=ssh_params, pgdata_path=pgdata_path)
+    write_env(vaults, pg_pw, ollama_url, ssh_params=ssh_params, pgdata_path=pgdata_path)
+    _write_compose_override(vaults)
 
     # ── Start Docker services ─────────────────────────────────────────────────
     header("Starting services (postgres, mcp-server, dashboard)")
-    env = {**os.environ, "OBSIDIAN_VAULT": vault, "POSTGRES_PASSWORD": pg_pw,
+    env = {**os.environ, "OBSIDIAN_VAULT": vaults[0], "POSTGRES_PASSWORD": pg_pw,
            "OLLAMA_URL": ollama_url}
+    if len(vaults) > 1:
+        env["OBSIDIAN_VAULTS"] = ",".join(f"/{Path(v).name}" for v in vaults)
     if pgdata_path:
         env["PGDATA_PATH"] = pgdata_path
     compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
