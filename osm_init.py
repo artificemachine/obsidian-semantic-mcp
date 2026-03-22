@@ -487,6 +487,10 @@ def _claude_cfg_path():
         return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     if system == "Linux":
         return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
+    if system == "Windows":
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            return Path(appdata) / "Claude" / "claude_desktop_config.json"
     return None
 
 
@@ -1178,6 +1182,12 @@ MODES_LINUX = {
     "3": ("Docker + remote Ollama",  "Postgres in Docker, Ollama on another machine",    mode_docker_remote_ollama),
 }
 
+MODES_WINDOWS = {
+    "1": ("Docker + host Ollama",    "Postgres in Docker, Ollama already on this PC",    mode_docker_host_ollama),
+    "2": ("Full Docker",             "Everything in containers  (recommended)",           mode_full_docker),
+    "3": ("Docker + remote Ollama",  "Postgres in Docker, Ollama on another machine",    mode_docker_remote_ollama),
+}
+
 
 # ── Init command ──────────────────────────────────────────────────────────────
 
@@ -1203,6 +1213,12 @@ def cmd_init():
             pass
         print(f"\n  Detected: {distro}\n")
         modes = MODES_LINUX
+    elif system == "Windows":
+        ver = platform.version()
+        arch = platform.machine()
+        print(f"\n  Detected: Windows {ver} ({arch})\n")
+        info("Requires Docker Desktop with WSL2 backend")
+        modes = MODES_WINDOWS
     else:
         fail(f"Platform {system!r} not yet supported by this wizard")
         info("Follow the manual steps in README.md")
@@ -1215,7 +1231,7 @@ def cmd_init():
     print()
 
     if _ollama_running_locally():
-        # macOS mode 2 = Docker + host Ollama; Linux mode 1 = same
+        # macOS mode 2 = Docker + host Ollama; Linux/Windows mode 1 = same
         rec_key = "2" if system == "Darwin" else "1"
         rec_name = modes[rec_key][0]
         print(f"  {_c('92', '✓')}  Ollama is already running on this machine.")

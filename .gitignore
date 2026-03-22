@@ -36,3 +36,7 @@ secrets.json
 # Test cache
 .pytest_cache/
 shipguard.txt
+
+# Session / agent working directories
+.claude/
+.superharness/

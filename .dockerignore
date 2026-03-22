@@ -4,3 +4,10 @@ __pycache__
 .git
 .env
 tests/
+.vscode/
+.idea/
+.claude/
+.superharness/
+*.pem
+*.key
+*.p12

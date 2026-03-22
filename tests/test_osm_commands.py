@@ -217,8 +217,20 @@ class TestClaudeCfgPath:
         assert ".config" in str(p)
         assert p.name == "claude_desktop_config.json"
 
-    def test_other_returns_none(self, monkeypatch):
+    def test_windows(self, monkeypatch):
         monkeypatch.setattr(osm_init.platform, "system", lambda: "Windows")
+        monkeypatch.setenv("APPDATA", "/tmp/fake_appdata")
+        p = osm_init._claude_cfg_path()
+        assert "fake_appdata" in str(p)
+        assert p.name == "claude_desktop_config.json"
+
+    def test_windows_no_appdata_returns_none(self, monkeypatch):
+        monkeypatch.setattr(osm_init.platform, "system", lambda: "Windows")
+        monkeypatch.delenv("APPDATA", raising=False)
+        assert osm_init._claude_cfg_path() is None
+
+    def test_other_returns_none(self, monkeypatch):
+        monkeypatch.setattr(osm_init.platform, "system", lambda: "FreeBSD")
         assert osm_init._claude_cfg_path() is None
 
 
@@ -712,9 +724,22 @@ class TestCmdInit:
         assert called
 
     def test_unsupported_platform_exits(self, monkeypatch):
-        monkeypatch.setattr(osm_init.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(osm_init.platform, "system", lambda: "FreeBSD")
         with pytest.raises(SystemExit):
             osm_init.cmd_init()
+
+    def test_windows_shows_3_modes(self, monkeypatch, capsys):
+        monkeypatch.setattr(osm_init.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(osm_init.platform, "version", lambda: "10.0.22631")
+        monkeypatch.setattr(osm_init.platform, "machine", lambda: "AMD64")
+        called = []
+        self._stub_modes(monkeypatch, "MODES_WINDOWS", "1", lambda: called.append(1))
+        osm_init._PARAMS["mode"] = "1"
+        osm_init.cmd_init()
+        out = capsys.readouterr().out
+        for key in osm_init.MODES_WINDOWS:
+            assert key in out
+        assert "WSL2" in out
 
     def test_macos_shows_4_modes(self, monkeypatch, capsys):
         self._macos_env(monkeypatch)

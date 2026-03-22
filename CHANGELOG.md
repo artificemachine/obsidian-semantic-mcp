@@ -9,6 +9,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.0] — 2026-03-22
+
+### Added
+- Windows support in setup wizard — Docker-only modes with WSL2 backend detection
+- Claude Desktop config path detection for Windows (`%APPDATA%\Claude\`)
+- Windows uv installer in README Quick Start section
+
+### Changed
+- Dockerfile runs as non-root `appuser` (was root)
+- `.dockerignore` expanded with IDE dirs, `.claude/`, `.superharness/`, secret file patterns
+- `.gitignore` now excludes `.claude/` and `.superharness/` session directories
+
+### Fixed
+- README Quick Start now shows platform-specific uv install commands (macOS/Linux + Windows)
+
+---
+
 ## [0.3.4] — 2026-03-20
 
 ### Changed

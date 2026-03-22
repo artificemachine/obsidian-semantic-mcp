@@ -23,8 +23,8 @@ No cloud services. No API keys. Everything runs locally.
 This guide uses **Docker** (recommended for all platforms). Prefer running natively? Jump to [Native Install (macOS)](#native-install-macos).
 
 **Before you start:**
-- **`uv`** must be installed — `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- **Docker Desktop** must be installed and running
+- **`uv`** must be installed — `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS/Linux) or `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"` (Windows)
+- **Docker Desktop** must be installed and running (Windows: enable WSL2 backend)
 - Know your vault path — in Obsidian: Settings → About → Vault location
 
 ### 1. Clone and run the setup wizard
@@ -60,7 +60,14 @@ The wizard detects your OS and asks which installation mode you want:
   3)  Docker + remote Ollama  Postgres in Docker, Ollama on another machine
 ```
 
-> **Which mode?** Pick **Full Docker** (mode 3 on macOS, mode 2 on Linux) unless you already have Ollama running locally — in that case pick **Docker + host Ollama** to avoid re-downloading the ~7GB model.
+**Windows (requires Docker Desktop with WSL2 backend):**
+```
+  1)  Docker + host Ollama    Postgres in Docker, Ollama already on this PC
+  2)  Full Docker         Everything in containers  (recommended)
+  3)  Docker + remote Ollama  Postgres in Docker, Ollama on another machine
+```
+
+> **Which mode?** Pick **Full Docker** (mode 3 on macOS, mode 2 on Linux/Windows) unless you already have Ollama running locally — in that case pick **Docker + host Ollama** to avoid re-downloading the ~7GB model.
 
 It then:
 - Installs prerequisites (Homebrew packages or Docker images)
@@ -230,7 +237,8 @@ obsidian-semantic-mcp/
 
 - An Obsidian vault on your filesystem
 - **macOS native:** Homebrew (auto-installs everything else)
-- **Docker modes:** Docker Desktop (macOS/Linux/Windows WSL2)
+- **Docker modes:** Docker Desktop (macOS/Linux/Windows)
+- **Windows:** Docker Desktop with WSL2 backend enabled, `uv` installed via `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
 
 ## MCP Tools
 
@@ -290,7 +298,7 @@ When using multiple vaults, the `search_vault` MCP tool gains a `vault` paramete
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OBSIDIAN_VAULT` | Absolute path to your Obsidian vault | *required* |
+| `OBSIDIAN_VAULT` | Absolute path to your Obsidian vault. Mounted **read-write** so MCP write/append tools can create and update notes. Mount with `:ro` if you only need search. | *required* |
 | `OBSIDIAN_VAULTS` | Comma-separated list of vault paths for multi-vault mode. Overrides `OBSIDIAN_VAULT` when set. | — |
 | `POSTGRES_PASSWORD` | PostgreSQL password (Docker) | *required for Docker* |
 | `DATABASE_URL` | Full connection string (overrides POSTGRES_* vars) | built from POSTGRES_* vars |

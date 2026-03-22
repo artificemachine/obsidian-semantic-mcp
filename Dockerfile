@@ -14,5 +14,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 COPY src/ src/
 COPY obsidian_semantic_mcp.py ./
 
+RUN useradd -r -s /bin/false appuser
+USER appuser
+
 # MCP server (stdio) is the default entrypoint
 CMD ["python3", "src/server.py"]
