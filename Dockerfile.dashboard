@@ -1,0 +1,20 @@
+FROM python:3.13-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-editable
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+COPY src/ src/
+COPY obsidian_semantic_mcp.py ./
+
+RUN useradd -r -s /bin/false appuser
+USER appuser
+
+EXPOSE 8484
+
+CMD ["python3", "src/dashboard.py"]

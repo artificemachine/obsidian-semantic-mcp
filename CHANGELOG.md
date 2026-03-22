@@ -15,6 +15,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Windows support in setup wizard — Docker-only modes with WSL2 backend detection
 - Claude Desktop config path detection for Windows (`%APPDATA%\Claude\`)
 - Windows uv installer in README Quick Start section
+- `Dockerfile.dashboard` — dedicated Docker image for the dashboard (enables Docker Hub publish)
+- ShipGuard SAST scan step in GitHub Actions CI pipeline
+- `docs/RUNBOOK.md` — operational runbook for incident response, recovery, and monitoring
 
 ### Changed
 - Dockerfile runs as non-root `appuser` (was root)
