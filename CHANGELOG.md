@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.1] — 2026-03-22
+
+### Added
+- `scripts/osm.ps1` — PowerShell CLI wrapper for Windows users
+
+### Changed
+- README updated to document both `scripts/osm` (macOS/Linux) and `scripts/osm.ps1` (Windows) wrappers
+
+---
+
 ## [0.5.0] — 2026-03-22
 
 ### Added

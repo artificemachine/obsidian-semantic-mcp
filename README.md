@@ -37,7 +37,7 @@ uv run osm init
 
 > **Tip:** Run `uv run osm init --dry-run` first to preview every action without making any changes.
 >
-> `scripts/osm` is a direct wrapper — if you prefer not to use `uv run`, `scripts/osm init` works identically without activating the venv.
+> `scripts/osm` (macOS/Linux) and `scripts/osm.ps1` (Windows PowerShell) are direct wrappers — if you prefer not to use `uv run`, they work identically without activating the venv.
 >
 > **One server, all projects:** `obsidian-semantic` is registered globally — running `osm init` from any other project is safe and idempotent. If already configured, it skips registration and informs you.
 >
@@ -215,7 +215,8 @@ Your Obsidian vault (e.g. $HOME/Documents/MyVault)
 ```
 obsidian-semantic-mcp/
 ├── scripts/
-│   └── osm                # CLI wrapper — `uv run osm init` or `scripts/osm init`
+│   ├── osm                # CLI wrapper (macOS/Linux) — `uv run osm init` or `scripts/osm init`
+│   └── osm.ps1            # CLI wrapper (Windows) — `.\scripts\osm.ps1 init`
 ├── src/
 │   ├── server.py          # MCP server — semantic search + vault CRUD (10 tools)
 │   └── dashboard.py       # Monitoring dashboard (http://localhost:8484)
