@@ -14,6 +14,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 COPY src/ src/
 COPY obsidian_semantic_mcp.py ./
 
+# SECURITY: appuser UID may not match host vault owner — pass --build-arg UID=$(id -u) for bind mounts
 RUN useradd -r -s /bin/false appuser
 USER appuser
 

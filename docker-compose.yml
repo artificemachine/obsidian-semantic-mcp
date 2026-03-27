@@ -1,6 +1,7 @@
 services:
 
   postgres:
+    # SECURITY: obsidian user has full DB privileges — consider read-only role for mcp-server
     image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
@@ -134,7 +135,7 @@ services:
       - ${OBSIDIAN_VAULT:-.}:/vault:ro
       # - /path/to/vault2:/vault2:ro  # add for multi-vault
     ports:
-      - "${DASHBOARD_PORT:-8484}:8484"
+      - "127.0.0.1:${DASHBOARD_PORT:-8484}:8484"
     deploy:
       resources:
         limits:

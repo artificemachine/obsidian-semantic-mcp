@@ -389,6 +389,14 @@ def prompt_ssh_credentials():
         else:
             info("Using SSH agent or password — you may be prompted by ssh")
 
+    if key_path:
+        import stat
+        kp = Path(key_path)
+        if kp.exists():
+            key_stat = os.stat(kp)
+            if key_stat.st_mode & (stat.S_IRGRP | stat.S_IROTH):
+                warn(f"SSH key {key_path} has too-open permissions. Run: chmod 600 {key_path}")
+
     return ssh_user, remote_host, int(remote_port), key_path
 
 

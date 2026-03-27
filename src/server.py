@@ -596,7 +596,7 @@ def _vault_root() -> Path:
 
 def _resolve_vault_path(relpath: str) -> Path:
     """Resolve a vault-relative path safely (no escaping the vault)."""
-    resolved = (_vault_root() / relpath).resolve()
+    resolved = (_vault_root() / relpath).resolve()  # resolve symlinks
     vault_resolved = _vault_root().resolve()
     if not resolved.is_relative_to(vault_resolved):
         raise ValueError(f"Path escapes vault: {relpath}")
@@ -811,6 +811,8 @@ async def list_tools():
     ]
 
 
+# SECURITY: MCP protocol has no built-in auth. Access control relies on
+# the transport layer (stdio). Do not expose this server over network without auth proxy.
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
 

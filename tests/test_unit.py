@@ -332,8 +332,17 @@ class TestBuildDsn:
     def test_fallback_dsn_has_no_credential_url(self, monkeypatch):
         """The libpq keyword format must never produce a postgresql://user:pass@host URL."""
         monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("POSTGRES_PASSWORD", "testpass")
         import config
         assert "://" not in config.build_dsn()
+
+    def test_fallback_dsn_raises_on_empty_password(self, monkeypatch):
+        """build_dsn() must raise when POSTGRES_PASSWORD is unset to prevent silent no-auth connections."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+        import config
+        with pytest.raises(RuntimeError, match="POSTGRES_PASSWORD"):
+            config.build_dsn()
 
 
 # ── _resolve_vault_path ───────────────────────────────────────────────────────

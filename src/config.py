@@ -21,4 +21,6 @@ def build_dsn() -> str:
     db   = os.environ.get("POSTGRES_DB",   "obsidian_brain")
     user = os.environ.get("POSTGRES_USER", "obsidian")
     pw   = os.environ.get("POSTGRES_PASSWORD", "")
+    if not pw:
+        raise RuntimeError("POSTGRES_PASSWORD environment variable must be set and non-empty")
     return f"host={host} port={port} dbname={db} user={user} password={pw}"
