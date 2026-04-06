@@ -543,7 +543,7 @@ wheels = [
 
 [[package]]
 name = "obsidian-semantic-mcp"
-version = "0.5.2"
+version = "0.5.3"
 source = { virtual = "." }
 dependencies = [
     { name = "httpx" },
