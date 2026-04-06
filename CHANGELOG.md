@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.5.3] — 2026-04-06
+
 ### Added
 - `OBSIDIAN_IGNORE_PATHS` support for vault-relative exclusion segments, with `archive` excluded by default and opt-in override support for archived notes
 
