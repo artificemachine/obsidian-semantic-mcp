@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Docker Hub CI workflow now runs tests before publishing and builds multi-arch images (amd64 + arm64)
+- Tests workflow is now callable as a reusable workflow
+
 ---
 
 ## [0.5.3] — 2026-04-06
