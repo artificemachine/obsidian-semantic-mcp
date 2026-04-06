@@ -301,6 +301,7 @@ When using multiple vaults, the `search_vault` MCP tool gains a `vault` paramete
 |----------|-------------|---------|
 | `OBSIDIAN_VAULT` | Absolute path to your Obsidian vault. Mounted **read-write** so MCP write/append tools can create and update notes. Mount with `:ro` if you only need search. | *required* |
 | `OBSIDIAN_VAULTS` | Comma-separated list of vault paths for multi-vault mode. Overrides `OBSIDIAN_VAULT` when set. | — |
+| `OBSIDIAN_IGNORE_PATHS` | Comma-separated vault-relative path segments to skip during indexing and watching. Defaults to `archive`; set it to an empty string to index archived notes. | `archive` |
 | `POSTGRES_PASSWORD` | PostgreSQL password (Docker) | *required for Docker* |
 | `DATABASE_URL` | Full connection string (overrides POSTGRES_* vars) | built from POSTGRES_* vars |
 | `POSTGRES_HOST` | PostgreSQL host | `localhost` |

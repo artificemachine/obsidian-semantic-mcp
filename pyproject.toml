@@ -1,6 +1,6 @@
 [project]
 name = "obsidian-semantic-mcp"
-version = "0.5.2"
+version = "0.5.3"
 description = "Semantic search MCP server for Obsidian vaults"
 requires-python = ">=3.10"
 license = "Apache-2.0"

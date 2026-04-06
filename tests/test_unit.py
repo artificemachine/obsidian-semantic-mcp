@@ -119,6 +119,67 @@ class TestWatchdogHandler:
             handler = server.VaultEventHandler()
             handler._handle_upsert(f.name)  # must not raise
 
+    def test_archive_modified_event_is_not_scheduled(self, tmp_path, monkeypatch):
+        """Archive changes must be ignored before debounce scheduling."""
+        import server
+
+        archive_note = tmp_path / "archive" / "nested" / "note.md"
+        archive_note.parent.mkdir(parents=True)
+        archive_note.write_text("# archived", encoding="utf-8")
+
+        timer_calls: list[str] = []
+
+        class FakeTimer:
+            def __init__(self, delay, func, args=()):
+                timer_calls.append("timer_init")
+            def cancel(self):
+                timer_calls.append("cancel")
+            def start(self):
+                timer_calls.append("start")
+
+        monkeypatch.setattr(server.threading, "Timer", FakeTimer)
+        monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+
+        handler = server.VaultEventHandler()
+
+        event = type("Event", (), {"is_directory": False, "src_path": str(archive_note)})()
+        handler.on_modified(event)
+
+        assert timer_calls == []
+
+    def test_live_modified_event_is_scheduled(self, tmp_path, monkeypatch):
+        """Live markdown changes must still flow through the watcher debounce path."""
+        import server
+
+        live_note = tmp_path / "notes" / "note.md"
+        live_note.parent.mkdir(parents=True)
+        live_note.write_text("# live", encoding="utf-8")
+
+        timer_calls: list[str] = []
+
+        class FakeTimer:
+            def __init__(self, delay, func, args=()):
+                timer_calls.append("timer_init")
+                self.delay = delay
+                self.func = func
+                self.args = args
+            def cancel(self):
+                timer_calls.append("cancel")
+            def start(self):
+                timer_calls.append("start")
+
+        monkeypatch.setattr(server.threading, "Timer", FakeTimer)
+        monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+
+        handler = server.VaultEventHandler()
+
+        event = type("Event", (), {"is_directory": False, "src_path": str(live_note)})()
+        handler.on_modified(event)
+
+        assert timer_calls == ["timer_init", "start"]
+
 
 # ── index_note connection safety ──────────────────────────────────────────────
 
@@ -211,6 +272,45 @@ class TestIsSystemPath:
              patch.object(server, "_VAULT_LIST", [str(hidden_vault)]):
             p = hidden_vault / "notes" / "note.md"
             assert server._is_system_path(p) is False
+
+
+# ── ignore path override ─────────────────────────────────────────────────────
+
+class TestIgnorePathOverride:
+    def test_default_skips_archive(self, tmp_path):
+        """archive/ should remain excluded when no override is set."""
+        import server
+        with patch.object(server, "VAULT_PATH", str(tmp_path)), \
+             patch.object(server, "_VAULT_LIST", [str(tmp_path)]):
+            p = tmp_path / "archive" / "nested" / "note.md"
+            assert server._is_system_path(p) is True
+
+    def test_empty_ignore_paths_allows_archive_indexing(self, tmp_path, monkeypatch):
+        """Setting OBSIDIAN_IGNORE_PATHS empty should allow archive/ to be indexed."""
+        import server
+
+        live = tmp_path / "notes" / "live.md"
+        archived = tmp_path / "archive" / "nested" / "note.md"
+        live.parent.mkdir(parents=True)
+        archived.parent.mkdir(parents=True)
+        live.write_text("# Live\nKeep me", encoding="utf-8")
+        archived.write_text("# Archived\nKeep me too", encoding="utf-8")
+
+        indexed: list[str] = []
+
+        def fake_embed_and_upsert(path, content, hash_, vault):
+            indexed.append(path)
+
+        monkeypatch.setenv("OBSIDIAN_IGNORE_PATHS", "")
+        monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+        monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
+        monkeypatch.setattr(server, "_embed_and_upsert", fake_embed_and_upsert)
+
+        server.index_vault(str(tmp_path))
+
+        assert str(archived) in indexed
+        assert str(live) in indexed
 
 
 # ── indexing_in_progress flag ────────────────────────────────────────────────
@@ -467,6 +567,57 @@ class TestIndexVaultHashConsistency:
         server.index_vault(str(tmp_path))
 
         assert str(note) in embed_calls, "Changed file must be re-embedded"
+
+
+# ── index_vault archive exclusion ────────────────────────────────────────────
+
+class TestIndexVaultArchiveExclusion:
+    """Regression: archive/ content must stay out of the default index."""
+
+    def test_skips_archive_notes_during_indexing(self, tmp_path, monkeypatch):
+        import server
+
+        live = tmp_path / "notes" / "live.md"
+        archived = tmp_path / "archive" / "nested" / "note.md"
+        live.parent.mkdir(parents=True)
+        archived.parent.mkdir(parents=True)
+        live.write_text("# Live\nKeep me", encoding="utf-8")
+        archived.write_text("# Archived\nSkip me", encoding="utf-8")
+
+        indexed: list[str] = []
+
+        def fake_embed_and_upsert(path, content, hash_, vault):
+            indexed.append(path)
+
+        monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+        monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
+        monkeypatch.setattr(server, "_embed_and_upsert", fake_embed_and_upsert)
+
+        server.index_vault(str(tmp_path))
+
+        assert indexed == [str(live)]
+
+    def test_indexes_normal_live_notes(self, tmp_path, monkeypatch):
+        import server
+
+        live = tmp_path / "notes" / "live.md"
+        live.parent.mkdir(parents=True)
+        live.write_text("# Live\nKeep me", encoding="utf-8")
+
+        indexed: list[str] = []
+
+        def fake_embed_and_upsert(path, content, hash_, vault):
+            indexed.append(path)
+
+        monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+        monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
+        monkeypatch.setattr(server, "_embed_and_upsert", fake_embed_and_upsert)
+
+        server.index_vault(str(tmp_path))
+
+        assert indexed == [str(live)]
 
 
 # ── dashboard search_notes connection safety ──────────────────────────────────

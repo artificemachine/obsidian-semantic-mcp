@@ -97,6 +97,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+_DEFAULT_IGNORED_PATH_SEGMENTS = {"archive"}
+_ALWAYS_SKIPPED_PATH_SEGMENTS = {".obsidian", ".trash", ".git"}
+
 
 # ───────────────────────────────── LRU Cache ─────────────────────────────────
 
@@ -389,8 +392,20 @@ def _embed_and_upsert(path: str, content: str, h: str, vault_id: str = "") -> No
             raise
 
 
+def _ignored_path_segments() -> set[str]:
+    """Return ignored vault path segments.
+
+    OBSIDIAN_IGNORE_PATHS replaces the default archive exclusion when set.
+    Set it to an empty string to allow archive/ content to be indexed.
+    """
+    raw = os.environ.get("OBSIDIAN_IGNORE_PATHS")
+    if raw is None:
+        return set(_DEFAULT_IGNORED_PATH_SEGMENTS)
+    return {segment.strip() for segment in raw.split(",") if segment.strip()}
+
+
 def _should_skip_path(path: Path) -> bool:
-    """Skip hidden/system directories (.obsidian, .trash, .git) relative to any vault root.
+    """Skip hidden/system directories and archive/ relative to any vault root.
 
     Falls back to VAULT_PATH when VAULT_PATHS is empty (test environments and
     single-vault setups that patch VAULT_PATH directly).
@@ -398,10 +413,16 @@ def _should_skip_path(path: Path) -> bool:
     # _VAULT_LIST is computed at import time; fall back to current VAULT_PATH so
     # tests that monkey-patch VAULT_PATH after import still work correctly.
     vaults = _VAULT_LIST or ([VAULT_PATH] if VAULT_PATH else [])
+    ignored_segments = _ignored_path_segments()
     for vp in vaults:
         try:
             rel = path.relative_to(Path(vp))
-            return any(part.startswith(".") for part in rel.parts)
+            return any(
+                part.startswith(".")
+                or part in _ALWAYS_SKIPPED_PATH_SEGMENTS
+                or part in ignored_segments
+                for part in rel.parts
+            )
         except ValueError:
             continue
     return True  # not under any known vault — skip
@@ -503,6 +524,8 @@ class VaultEventHandler(FileSystemEventHandler):
 
     def _schedule(self, path: str):
         """Debounce rapid events for the same path (e.g. Obsidian autosave)."""
+        if not path.endswith(".md") or _should_skip_path(Path(path)):
+            return
         with self._lock:
             existing = self._timers.pop(path, None)
             if existing:
@@ -514,8 +537,6 @@ class VaultEventHandler(FileSystemEventHandler):
     def _handle_upsert(self, path: str):
         with self._lock:
             self._timers.pop(path, None)
-        if not path.endswith(".md") or _should_skip_path(Path(path)):
-            return
         try:
             content = Path(path).read_text(encoding="utf-8", errors="ignore")
             index_note(path, content, self._vault_id)
@@ -533,12 +554,12 @@ class VaultEventHandler(FileSystemEventHandler):
             self._schedule(event.src_path)
 
     def on_deleted(self, event):
-        if not event.is_directory and event.src_path.endswith(".md"):
+        if not event.is_directory and event.src_path.endswith(".md") and not _should_skip_path(Path(event.src_path)):
             delete_note(event.src_path)
 
     def on_moved(self, event):
         if not event.is_directory:
-            if event.src_path.endswith(".md"):
+            if event.src_path.endswith(".md") and not _should_skip_path(Path(event.src_path)):
                 delete_note(event.src_path)
             self._schedule(event.dest_path)
 
