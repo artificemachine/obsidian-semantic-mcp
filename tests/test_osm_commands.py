@@ -613,6 +613,9 @@ class TestCmdRemove:
             lambda *a, **kw: _cp(0, stdout="container-id"),
         )
         monkeypatch.setattr(osm_init, "_claude_cfg_path", lambda: cfg_path)
+        launcher = tmp_path / ".local" / "bin" / "osm"
+        launcher.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(osm_init, "_osm_launcher_path", lambda: launcher)
 
     def test_user_aborts(self, tmp_path, monkeypatch, capsys):
         self._setup(monkeypatch, tmp_path)

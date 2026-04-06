@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `OBSIDIAN_IGNORE_PATHS` support for vault-relative exclusion segments, with `archive` excluded by default and opt-in override support for archived notes
+
+### Changed
+- `src/server.py` now skips `archive/` content during indexing and watcher handling by default
+- `README.md` and `docs/RUNBOOK.md` now document the archive exclusion behavior and override
+
+### Fixed
+- `osm_init.py` now resolves the osm launcher path through a helper so `cmd_remove()` is testable without touching the real home directory
+- `tests/test_osm_commands.py` now redirects launcher deletion to a temp path during tests
+
 ---
 
 ## [0.5.1] — 2026-03-22

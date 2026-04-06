@@ -1085,6 +1085,11 @@ def _link_osm_to_path():
         warn(f"Could not install osm launcher: {exc}")
 
 
+def _osm_launcher_path() -> Path:
+    """Return the installed osm launcher path."""
+    return Path.home() / ".local" / "bin" / "osm"
+
+
 def _done_native(vault):
     _link_osm_to_path()
     print()
@@ -1274,7 +1279,7 @@ def cmd_remove():
 
     # ── osm launcher ──────────────────────────────────────────────────────────
     header("Removing osm launcher")
-    launcher = Path.home() / ".local" / "bin" / "osm"
+    launcher = _osm_launcher_path()
     if DRY_RUN:
         _dry(f"remove {launcher}")
     elif launcher.exists():

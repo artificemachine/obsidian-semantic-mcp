@@ -64,6 +64,8 @@ docker compose restart dashboard
 
 First-run indexing: ~1-2 seconds per note with local Ollama. A 500-note vault takes 5-15 minutes.
 
+By default, `archive/` content is excluded from indexing and watching. To index archived notes, set `OBSIDIAN_IGNORE_PATHS=""` in your environment or `.env`.
+
 ```bash
 # Watch progress
 docker compose logs -f mcp-server | grep -i index
