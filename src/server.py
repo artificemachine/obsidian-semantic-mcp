@@ -1199,8 +1199,14 @@ async def main():
     log.info("Vaults: %s", ", ".join(VAULT_PATHS))
 
     loop = asyncio.get_event_loop()
-    loop.add_signal_handler(signal.SIGTERM, _shutdown)
-    loop.add_signal_handler(signal.SIGINT, _shutdown)
+    if sys.platform != "win32":
+        loop.add_signal_handler(signal.SIGTERM, _shutdown)
+        loop.add_signal_handler(signal.SIGINT, _shutdown)
+    else:
+        # Windows: add_signal_handler is not implemented on ProactorEventLoop.
+        # signal.signal() on the main thread is the fallback.
+        signal.signal(signal.SIGINT, lambda *_: _shutdown())
+        signal.signal(signal.SIGTERM, lambda *_: _shutdown())
 
     # Full index + watchers start in background — server is immediately ready
     threading.Thread(
