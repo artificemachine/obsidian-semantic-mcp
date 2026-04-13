@@ -35,11 +35,11 @@ ok "git found"
 # ── Clone or update ───────────────────────────────────────────────────────────
 
 if [ -d "$INSTALL_DIR/.git" ]; then
-    info "Updating existing install at $INSTALL_DIR…"
+    info "Updating existing install at ${INSTALL_DIR}..."
     git -C "$INSTALL_DIR" pull --ff-only
     ok "Up to date"
 else
-    info "Cloning to $INSTALL_DIR…"
+    info "Cloning to ${INSTALL_DIR}..."
     git clone --depth=1 "$REPO_URL" "$INSTALL_DIR"
     ok "Cloned"
 fi
