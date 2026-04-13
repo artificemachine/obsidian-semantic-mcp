@@ -13,6 +13,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.5.4] — 2026-04-13
+
+### Fixed
+- `osm_init.py` Windows launcher parity: `_link_osm_to_path()` now writes `osm.cmd` (batch wrapper → `scripts\osm.ps1`) on Windows and a bash script on macOS/Linux; `_osm_launcher_path()` returns the platform-correct path; `cmd_remove()` deletes the right file on every platform
+- Dashboard `_get_vault_stats()` now uses `_should_skip_path()` instead of a hand-rolled dotfile filter, so `archive/` and `OBSIDIAN_IGNORE_PATHS` are respected; counts now span all `VAULT_PATHS` in multi-vault mode
+- Dashboard `_get_db_stats()` recent-notes paths are now relativized against the correct vault root in multi-vault mode
+- `test_e2e.py` harness now validates `DATABASE_URL` or `POSTGRES_PASSWORD` is present before spawning the server subprocess, with a clear actionable error if missing
+- CI `shipguard` scanner pinned as a dev dependency in `pyproject.toml` (managed via `uv.lock`) and removed from the workflow install step
+
+### Changed
+- `src/dashboard.py` imports `_should_skip_path` from `server` — vault stats and indexer now share a single exclusion code path
+- `tests/test_unit.py` extended with 21 new tests covering launcher platform parity, dashboard archive exclusion, multi-vault stat counting, multi-vault recent-note relativization, E2E harness env validation, and CI pinning governance
+- README native test commands updated to include the required `DATABASE_URL` env var
+- README test count and osm Windows launcher description updated
+- `docs/RUNBOOK.md` Install/Repair section now documents the platform-specific launcher shape (`osm` bash script vs `osm.cmd` batch wrapper)
+- `docs/ARCHITECTURE.md` dashboard extension note updated to reflect that stats span all configured vaults via the shared skip filter
+
+---
+
 ## [0.5.3] — 2026-04-06
 
 ### Added

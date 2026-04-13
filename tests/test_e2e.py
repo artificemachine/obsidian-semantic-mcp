@@ -72,6 +72,23 @@ def check(label, condition, detail=""):
         print(f"  {FAIL}  {label}" + (f" — {detail}" if detail else ""))
 
 
+def _build_server_env(vault: str) -> dict:
+    """Build the subprocess env for the MCP server.
+
+    Requires DATABASE_URL or POSTGRES_PASSWORD — mirrors config.py so the
+    server doesn't crash after launch with a cryptic DB error.
+    """
+    env = {**os.environ, "OBSIDIAN_VAULT": vault}
+    if not env.get("DATABASE_URL") and not env.get("POSTGRES_PASSWORD"):
+        print(
+            "Error: set DATABASE_URL or POSTGRES_PASSWORD before running this test.\n"
+            "  Example: DATABASE_URL=postgresql://localhost/obsidian_brain "
+            "OBSIDIAN_VAULT=/path/to/vault uv run python3 tests/test_e2e.py"
+        )
+        sys.exit(1)
+    return env
+
+
 def main():
     global passed, failed
 
@@ -80,7 +97,7 @@ def main():
         print("Set OBSIDIAN_VAULT before running this test.")
         sys.exit(1)
 
-    env = {**os.environ, "OBSIDIAN_VAULT": vault}
+    env = _build_server_env(vault)
 
     print("\n--- obsidian-semantic-mcp E2E test ---\n")
     print("Starting MCP server...")

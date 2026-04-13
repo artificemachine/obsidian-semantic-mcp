@@ -236,3 +236,124 @@ class TestDefaultSshKey:
         ssh_dir.mkdir()
         (ssh_dir / "id_rsa").touch()
         assert "id_rsa" in osm_init._default_ssh_key()
+
+
+# ── Launcher platform parity ──────────────────────────────────────────────────
+
+class TestOsmLauncherPath:
+    """_osm_launcher_path() must return platform-correct path."""
+
+    def test_unix_returns_bin_osm(self, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        result = osm_init._osm_launcher_path()
+        assert result == Path.home() / ".local" / "bin" / "osm"
+
+    def test_linux_returns_bin_osm(self, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Linux")
+        result = osm_init._osm_launcher_path()
+        assert result == Path.home() / ".local" / "bin" / "osm"
+
+    def test_windows_returns_osm_cmd(self, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Windows")
+        result = osm_init._osm_launcher_path()
+        assert result == Path.home() / ".local" / "bin" / "osm.cmd"
+
+
+class TestLinkOsmToPath:
+    """_link_osm_to_path() must write platform-appropriate launcher content."""
+
+    def setup_method(self):
+        _reset()
+
+    def teardown_method(self):
+        _reset()
+
+    def test_unix_launcher_is_bash_script(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        launcher = tmp_path / ".local" / "bin" / "osm"
+        with patch("osm_init.ok"), patch("osm_init.warn"), patch("osm_init.info"):
+            osm_init._link_osm_to_path()
+        assert launcher.exists()
+        content = launcher.read_text()
+        assert content.startswith("#!/usr/bin/env bash")
+        assert oct(launcher.stat().st_mode)[-3:] == "755"
+
+    def test_windows_launcher_is_cmd_batch(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Windows")
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        launcher = tmp_path / ".local" / "bin" / "osm.cmd"
+        with patch("osm_init.ok"), patch("osm_init.warn"), patch("osm_init.info"):
+            osm_init._link_osm_to_path()
+        assert launcher.exists()
+        content = launcher.read_text()
+        assert "@echo off" in content
+        assert "osm.ps1" in content
+
+    def test_dry_run_does_not_write_unix(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        osm_init.DRY_RUN = True
+        with patch("osm_init.ok"), patch("osm_init.warn"), patch("osm_init.info"):
+            osm_init._link_osm_to_path()
+        assert not (tmp_path / ".local" / "bin" / "osm").exists()
+        assert any("osm" in a for a in osm_init._DRY_ACTIONS)
+
+    def test_dry_run_does_not_write_windows(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Windows")
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        osm_init.DRY_RUN = True
+        with patch("osm_init.ok"), patch("osm_init.warn"), patch("osm_init.info"):
+            osm_init._link_osm_to_path()
+        assert not (tmp_path / ".local" / "bin" / "osm.cmd").exists()
+        assert any("osm" in a for a in osm_init._DRY_ACTIONS)
+
+
+class TestCmdRemoveLauncherParity:
+    """cmd_remove() must delete the platform-correct launcher file."""
+
+    def setup_method(self):
+        _reset()
+
+    def teardown_method(self):
+        _reset()
+
+    def _stub_remove_env(self, tmp_path):
+        """Point PROJECT_ROOT at tmp_path so .env check doesn't crash."""
+        osm_init.PROJECT_ROOT = tmp_path
+
+    def test_removes_unix_launcher(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        launcher = tmp_path / ".local" / "bin" / "osm"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/usr/bin/env bash\n")
+        self._stub_remove_env(tmp_path)
+        osm_init._PARAMS["yes"] = "y"
+        with (
+            patch("osm_init.ok"), patch("osm_init.warn"), patch("osm_init.info"),
+            patch("osm_init.header"),
+            patch("osm_init.run", return_value=type("R", (), {"stdout": "", "returncode": 0})()),
+            patch("osm_init.cmd_exists", return_value=False),
+            patch("osm_init._claude_cfg_path", return_value=None),
+        ):
+            osm_init.cmd_remove()
+        assert not launcher.exists()
+
+    def test_removes_windows_launcher(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Windows")
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        launcher = tmp_path / ".local" / "bin" / "osm.cmd"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("@echo off\n")
+        self._stub_remove_env(tmp_path)
+        osm_init._PARAMS["yes"] = "y"
+        with (
+            patch("osm_init.ok"), patch("osm_init.warn"), patch("osm_init.info"),
+            patch("osm_init.header"),
+            patch("osm_init.run", return_value=type("R", (), {"stdout": "", "returncode": 0})()),
+            patch("osm_init.cmd_exists", return_value=False),
+            patch("osm_init._claude_cfg_path", return_value=None),
+        ):
+            osm_init.cmd_remove()
+        assert not launcher.exists()

@@ -23,7 +23,7 @@ from urllib.parse import urlparse, parse_qs
 import requests
 
 from config import build_dsn
-from server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS
+from server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS, _should_skip_path
 
 VAULT_PATH  = VAULT_PATHS[0] if VAULT_PATHS else ""
 OLLAMA_URL  = os.environ.get("OLLAMA_URL", "http://localhost:11434")
@@ -174,11 +174,16 @@ def _get_db_stats(stats: dict) -> None:
             cur.execute(
                 "SELECT path, indexed_at FROM notes ORDER BY indexed_at DESC LIMIT 10;"
             )
+            all_vaults = VAULT_PATHS if VAULT_PATHS else ([VAULT_PATH] if VAULT_PATH else [])
             for path, ts in cur.fetchall():
-                try:
-                    rel = str(Path(path).relative_to(VAULT_PATH)) if VAULT_PATH else path
-                except ValueError:
-                    rel = path
+                rel = path
+                p = Path(path)
+                for vp in all_vaults:
+                    try:
+                        rel = str(p.relative_to(vp))
+                        break
+                    except ValueError:
+                        continue
                 stats["recent_notes"].append(
                     {"path": rel, "indexed_at": ts.strftime("%Y-%m-%d %H:%M")}
                 )
@@ -203,16 +208,17 @@ def _get_db_stats(stats: dict) -> None:
 
 
 def _get_vault_stats(stats: dict) -> None:
-    if not VAULT_PATH:
+    vaults = VAULT_PATHS if VAULT_PATHS else ([VAULT_PATH] if VAULT_PATH else [])
+    if not vaults:
         return
-    vault = Path(VAULT_PATH)
-    md_files = [
-        f
-        for f in vault.rglob("*.md")
-        if not any(p.startswith(".") for p in f.relative_to(vault).parts)
-    ]
-    stats["vault_file_count"] = len(md_files)
-    stats["unindexed_count"] = max(0, len(md_files) - stats["indexed_count"])
+    total = sum(
+        1
+        for vp in vaults
+        for f in Path(vp).rglob("*.md")
+        if not _should_skip_path(f)
+    )
+    stats["vault_file_count"] = total
+    stats["unindexed_count"] = max(0, total - stats["indexed_count"])
 
 
 def _get_ollama_stats(stats: dict) -> None:

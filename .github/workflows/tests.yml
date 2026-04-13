@@ -31,11 +31,8 @@ jobs:
         env:
           OBSIDIAN_VAULT: /tmp/test-vault
 
-      - name: Install ShipGuard
-        run: pip install shipguard
-
       - name: SAST scan
-        run: shipguard scan . --format terminal
+        run: uv run shipguard scan . --format terminal
 
       - name: Upload coverage
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4

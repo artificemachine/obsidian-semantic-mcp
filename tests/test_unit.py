@@ -671,3 +671,262 @@ class TestDashboardSearchConnectionSafety:
         assert embed_idx < db_open_idx, (
             f"embed() was called after db_conn was opened — pool starvation risk: {call_order}"
         )
+
+
+# ── dashboard _get_vault_stats — archive exclusion and multi-vault ────────────
+
+class TestDashboardVaultStats:
+    """
+    _get_vault_stats() must:
+    - use _should_skip_path() (not a hand-rolled dotfile filter)
+    - exclude archive/ by default
+    - include archive/ when OBSIDIAN_IGNORE_PATHS=""
+    - sum across all VAULT_PATHS in multi-vault mode
+    """
+
+    def _run(self, tmp_path, vault_paths, monkeypatch, env_override=None):
+        import server
+        import dashboard
+
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(p) for p in vault_paths])
+        monkeypatch.setattr(dashboard, "VAULT_PATHS", [str(p) for p in vault_paths])
+        monkeypatch.setattr(dashboard, "VAULT_PATH", str(vault_paths[0]) if vault_paths else "")
+
+        if env_override is not None:
+            monkeypatch.setenv("OBSIDIAN_IGNORE_PATHS", env_override)
+        else:
+            monkeypatch.delenv("OBSIDIAN_IGNORE_PATHS", raising=False)
+
+        stats = {"indexed_count": 0}
+        dashboard._get_vault_stats(stats)
+        return stats
+
+    def test_archive_excluded_by_default(self, tmp_path, monkeypatch):
+        vault = tmp_path / "vault"
+        (vault / "notes").mkdir(parents=True)
+        (vault / "archive" / "old").mkdir(parents=True)
+        (vault / "notes" / "live.md").write_text("# live")
+        (vault / "archive" / "old" / "gone.md").write_text("# archived")
+
+        stats = self._run(tmp_path, [vault], monkeypatch)
+        assert stats["vault_file_count"] == 1, (
+            f"archive/ should be excluded by default, got {stats['vault_file_count']}"
+        )
+
+    def test_archive_included_when_ignore_paths_empty(self, tmp_path, monkeypatch):
+        vault = tmp_path / "vault"
+        (vault / "notes").mkdir(parents=True)
+        (vault / "archive").mkdir(parents=True)
+        (vault / "notes" / "live.md").write_text("# live")
+        (vault / "archive" / "gone.md").write_text("# archived")
+
+        stats = self._run(tmp_path, [vault], monkeypatch, env_override="")
+        assert stats["vault_file_count"] == 2, (
+            f"OBSIDIAN_IGNORE_PATHS='' should include archive/, got {stats['vault_file_count']}"
+        )
+
+    def test_multi_vault_sums_all_vaults(self, tmp_path, monkeypatch):
+        vault_a = tmp_path / "vault_a"
+        vault_b = tmp_path / "vault_b"
+        vault_a.mkdir()
+        vault_b.mkdir()
+        (vault_a / "a1.md").write_text("# a1")
+        (vault_a / "a2.md").write_text("# a2")
+        (vault_b / "b1.md").write_text("# b1")
+
+        stats = self._run(tmp_path, [vault_a, vault_b], monkeypatch)
+        assert stats["vault_file_count"] == 3, (
+            f"multi-vault should sum all vaults, got {stats['vault_file_count']}"
+        )
+
+    def test_dotfile_dirs_still_excluded(self, tmp_path, monkeypatch):
+        vault = tmp_path / "vault"
+        (vault / ".obsidian").mkdir(parents=True)
+        (vault / "notes").mkdir()
+        (vault / ".obsidian" / "config.md").write_text("# internal")
+        (vault / "notes" / "real.md").write_text("# real")
+
+        stats = self._run(tmp_path, [vault], monkeypatch)
+        assert stats["vault_file_count"] == 1, (
+            f".obsidian/ must still be excluded, got {stats['vault_file_count']}"
+        )
+
+    def test_unindexed_count_excludes_archive(self, tmp_path, monkeypatch):
+        vault = tmp_path / "vault"
+        (vault / "notes").mkdir(parents=True)
+        (vault / "archive").mkdir(parents=True)
+        (vault / "notes" / "live.md").write_text("# live")
+        (vault / "archive" / "old.md").write_text("# archived")
+
+        # pretend 0 notes are indexed
+        stats = self._run(tmp_path, [vault], monkeypatch)
+        # vault_file_count = 1 (archive excluded), indexed_count = 0 → unindexed = 1
+        assert stats["unindexed_count"] == 1
+
+
+# ── dashboard _get_db_stats — recent-notes multi-vault relativization ─────────
+
+class TestDashboardRecentNotesRelativization:
+    """
+    Recent notes paths must be rendered relative to the correct vault root.
+    In multi-vault mode, a note from vault_b should not fail with a ValueError
+    when relativized against vault_a — it should use vault_b's root instead.
+    """
+
+    def _make_fake_db_conn(self, rows_notes, rows_paths):
+        from contextlib import contextmanager
+
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = lambda s: s
+        mock_cur.__exit__ = MagicMock(return_value=False)
+
+        call_count = {"n": 0}
+
+        def side_effect_fetchone():
+            call_count["n"] += 1
+            n = call_count["n"]
+            if n == 1:   return ("PostgreSQL 16",)
+            if n == 2:   return ("0.7.0",)
+            if n == 3:   return (len(rows_notes), None, None)
+            if n == 4:   return (1024,)
+            return None
+
+        mock_cur.fetchone.side_effect = side_effect_fetchone
+        mock_cur.fetchall.side_effect = [rows_notes, rows_paths]
+        mock_conn.__enter__ = lambda s: s
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value = mock_cur
+
+        @contextmanager
+        def fake_db_conn():
+            yield mock_conn
+
+        return fake_db_conn
+
+    def test_recent_note_relativized_to_correct_vault(self, tmp_path, monkeypatch):
+        import server
+        import dashboard
+
+        vault_a = tmp_path / "vault_a"
+        vault_b = tmp_path / "vault_b"
+        vault_a.mkdir()
+        vault_b.mkdir()
+
+        note_in_b = str(vault_b / "note_b.md")
+
+        from datetime import datetime, timezone
+        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        rows_notes = [(note_in_b, ts)]
+        rows_paths = [(note_in_b,)]
+
+        fake_db = self._make_fake_db_conn(rows_notes, rows_paths)
+
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(vault_a), str(vault_b)])
+        monkeypatch.setattr(dashboard, "VAULT_PATHS", [str(vault_a), str(vault_b)])
+        monkeypatch.setattr(dashboard, "VAULT_PATH", str(vault_a))
+        monkeypatch.setattr(dashboard, "db_conn", fake_db)
+
+        stats = {"recent_notes": []}
+        dashboard._get_db_stats(stats)
+
+        assert len(stats["recent_notes"]) == 1
+        rendered_path = stats["recent_notes"][0]["path"]
+        # Must be relative to vault_b, not fail with ValueError
+        assert "note_b.md" in rendered_path
+        # Must NOT contain the full tmp_path prefix (i.e. it was relativized)
+        assert str(vault_b) not in rendered_path
+
+
+# ── test_e2e.py — subprocess env validation ───────────────────────────────────
+
+class TestE2eHarnessEnv:
+    """
+    _build_server_env() must:
+    - Exit before spawning the server when no DB config is present
+    - Pass DATABASE_URL through when set
+    - Pass POSTGRES_PASSWORD through when set
+    - Always include OBSIDIAN_VAULT
+    """
+
+    @pytest.fixture(autouse=True)
+    def _insert_tests_dir(self):
+        tests_dir = str(Path(__file__).parent)
+        if tests_dir not in sys.path:
+            sys.path.insert(0, tests_dir)
+
+    def _import_build_server_env(self):
+        # Import fresh each time so monkeypatching os.environ is respected
+        import importlib
+        import test_e2e
+        importlib.reload(test_e2e)
+        return test_e2e._build_server_env
+
+    def test_exits_when_no_db_config(self, monkeypatch):
+        """Harness must fail before spawning when neither DATABASE_URL nor POSTGRES_PASSWORD is set."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+        fn = self._import_build_server_env()
+        with pytest.raises(SystemExit):
+            fn("/vault")
+
+    def test_passes_database_url_through(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test_db")
+        monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+        fn = self._import_build_server_env()
+        env = fn("/vault")
+        assert env.get("DATABASE_URL") == "postgresql://localhost/test_db"
+        assert env.get("OBSIDIAN_VAULT") == "/vault"
+
+    def test_passes_postgres_password_through(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
+        fn = self._import_build_server_env()
+        env = fn("/vault")
+        assert env.get("POSTGRES_PASSWORD") == "secret"
+        assert env.get("OBSIDIAN_VAULT") == "/vault"
+
+    def test_vault_always_overrides_env(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test_db")
+        monkeypatch.setenv("OBSIDIAN_VAULT", "/original")
+        fn = self._import_build_server_env()
+        env = fn("/new_vault")
+        assert env["OBSIDIAN_VAULT"] == "/new_vault"
+
+
+# ── CI workflow — security tool pinning ───────────────────────────────────────
+
+class TestCIWorkflowPinning:
+    """
+    Static assertion: shipguard must be declared as a pinned dev dependency in
+    pyproject.toml so it is installed by `uv sync` and the pin is managed
+    alongside all other deps rather than buried in the workflow.
+    """
+
+    @pytest.fixture(scope="class")
+    def pyproject_text(self):
+        p = Path(__file__).parent.parent / "pyproject.toml"
+        assert p.exists(), f"pyproject.toml not found: {p}"
+        return p.read_text()
+
+    @pytest.fixture(scope="class")
+    def workflow_text(self):
+        wf = Path(__file__).parent.parent / ".github" / "workflows" / "tests.yml"
+        assert wf.exists(), f"Workflow file not found: {wf}"
+        return wf.read_text()
+
+    def test_shipguard_in_dev_deps(self, pyproject_text):
+        """shipguard must be declared in [dependency-groups] dev.
+        The exact version is pinned in uv.lock; pyproject.toml carries the constraint."""
+        assert "shipguard" in pyproject_text, (
+            "shipguard must appear as a dev dependency in pyproject.toml — "
+            "exact version is pinned via uv.lock, not the workflow"
+        )
+
+    def test_workflow_does_not_install_shipguard_separately(self, workflow_text):
+        """CI must not install shipguard via a separate pip install step —
+        uv sync handles it through pyproject.toml."""
+        assert "pip install shipguard" not in workflow_text, (
+            "Found 'pip install shipguard' in the workflow — "
+            "remove it and manage the version via pyproject.toml dev dependencies"
+        )

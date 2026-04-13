@@ -20,29 +20,35 @@ No cloud services. No API keys. Everything runs locally.
 
 ## Quick Start
 
-This guide uses **Docker** (recommended for all platforms). Prefer running natively? Jump to [Native Install (macOS)](#native-install-macos).
+Start with the bootstrap installer for your platform. If you already cloned the repo, you can skip bootstrap and run `uv run osm init` from the project root.
 
 **Before you start:**
 - **`uv`** must be installed — `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS/Linux) or `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"` (Windows)
 - **Docker Desktop** must be installed and running (Windows: enable WSL2 backend)
 - Know your vault path — in Obsidian: Settings → About → Vault location
 
-### 1. Clone and run the setup wizard
+### 1. Bootstrap and run the setup wizard
 
+**macOS / Linux:**
 ```bash
-git clone https://github.com/celstnblacc/obsidian-semantic-mcp.git && cd obsidian-semantic-mcp
-uv sync
-uv run osm init
+curl -fsSL https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.sh | bash
 ```
 
-> **Tip:** Run `uv run osm init --dry-run` first to preview every action without making any changes.
+**Windows PowerShell:**
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.ps1 | iex"
+```
+
+> **Tip:** The bootstrap installer launches `osm init` for you. After a full install, you can run `osm init --dry-run` from an existing checkout to preview every action without making any changes.
 >
-> `scripts/osm` (macOS/Linux) and `scripts/osm.ps1` (Windows PowerShell) are direct wrappers — if you prefer not to use `uv run`, they work identically without activating the venv.
-> New users can bootstrap without cloning manually: use `install.sh` on macOS/Linux or `install.ps1` on Windows.
+> If you already cloned the repo, `scripts/osm` (macOS/Linux) and `scripts/osm.ps1` (Windows PowerShell) work the same as the bootstrap installers.
+> If you prefer a manual checkout, clone the repo and run `uv run osm init` from the project root.
 >
 > **One server, all projects:** `obsidian-semantic` is registered globally — running `osm init` from any other project is safe and idempotent. If already configured, it skips registration and informs you.
 >
 > **Exit the wizard at any prompt:** type `q`, `quit`, `exit`, or `skip` — or press `Ctrl+C`.
+
+The bootstrap installers clone into the local data directory, create a PATH shim for `osm`, and launch the wizard.
 
 The wizard detects your OS and asks which installation mode you want:
 
@@ -68,10 +74,11 @@ The wizard detects your OS and asks which installation mode you want:
   3)  Docker + remote Ollama  Postgres in Docker, Ollama on another machine
 ```
 
-> **Which mode?** Pick **Full Docker** (mode 3 on macOS, mode 2 on Linux/Windows) unless you already have Ollama running locally — in that case pick **Docker + host Ollama** to avoid re-downloading the ~7GB model.
+> **Which mode?** Pick **Full Docker** (mode 3 on macOS, mode 2 on Linux/Windows) unless you already have Ollama running locally - in that case pick **Docker + host Ollama** to avoid re-downloading the Ollama image and model.
 
 It then:
-- Installs prerequisites (Homebrew packages or Docker images)
+- Sets up the local install directory and PATH shim
+- Installs prerequisites or verifies they already exist
 - Pulls `nomic-embed-text` if needed
 - Writes a `.env` file (gitignored) with your vault path and credentials
 - Updates `claude_desktop_config.json` automatically
@@ -194,6 +201,8 @@ Use `osm` to set up, manage, and tear down the stack. The wizard installs all pr
 
 **`osm init` flags:** `--mode`, `--vault`, `--pg-password`, `--persistent` / `--no-persistent`, `--data-dir`, `--ssh-host`, `--ssh-user`, `--ssh-port`, `--ssh-key`, `--vault-remote`
 
+> **Windows launcher:** `osm init` installs `osm.cmd` into `%USERPROFILE%\.local\bin\`. Windows resolves `.cmd` automatically, so you invoke it as `osm` from any terminal. If `osm` is not found, add `%USERPROFILE%\.local\bin` to your `Path` environment variable.
+
 ## Architecture
 
 ```
@@ -215,6 +224,8 @@ Your Obsidian vault (e.g. $HOME/Documents/MyVault)
 
 ```
 obsidian-semantic-mcp/
+├── install.sh          # Bootstrap installer for macOS/Linux
+├── install.ps1         # Bootstrap installer for Windows PowerShell
 ├── scripts/
 │   ├── osm                # CLI wrapper (macOS/Linux) — `uv run osm init` or `scripts/osm init`
 │   └── osm.ps1            # CLI wrapper (Windows) — `.\scripts\osm.ps1 init`
@@ -340,7 +351,7 @@ OBSIDIAN_VAULT="/path/to/your/vault" uv run python3 src/dashboard.py
 uv run pytest -q
 ```
 
-Runs 188 fast unit tests covering embedding, search, vault path safety, connection pool, and the osm CLI wizard.
+Runs 230 fast unit tests covering embedding, search, vault path safety, connection pool, dashboard stats, the osm CLI wizard, and CI governance.
 
 ### `test_dashboard_smoke.py` — Dashboard health checks (Docker stack)
 
@@ -361,15 +372,21 @@ Checks: JS string safety, DOM element completeness, `/api/stats` schema, service
 Verifies Python deps, vault path, PostgreSQL + pgvector, Ollama, and embedding smoke test. Run directly — not via pytest.
 
 ```bash
-OBSIDIAN_VAULT="/path/to/your/vault" uv run python3 tests/test_setup.py
+DATABASE_URL="postgresql://localhost/obsidian_brain" \
+OBSIDIAN_VAULT="/path/to/your/vault" \
+uv run python3 tests/test_setup.py
 ```
 
 ### `test_e2e.py` — End-to-end MCP test (native installs)
 
 Launches the server, initializes MCP protocol, waits for indexing, runs semantic search, and verifies results. Run directly — not via pytest.
 
+Requires `DATABASE_URL` **or** `POSTGRES_PASSWORD` — the server will exit immediately without one.
+
 ```bash
-OBSIDIAN_VAULT="/path/to/your/vault" uv run python3 tests/test_e2e.py
+DATABASE_URL="postgresql://localhost/obsidian_brain" \
+OBSIDIAN_VAULT="/path/to/your/vault" \
+uv run python3 tests/test_e2e.py
 ```
 
 ## Troubleshooting
@@ -394,7 +411,7 @@ OBSIDIAN_VAULT="/path/to/your/vault" uv run python3 tests/test_e2e.py
 
 ## Native Install (macOS)
 
-If you prefer running without Docker:
+Manual install only. Use this if you want to control every step yourself instead of using the bootstrap installer.
 
 ### 1. Clone and install
 
@@ -431,7 +448,9 @@ psql obsidian_brain -c "CREATE EXTENSION vector;"
 ### 4. Verify
 
 ```bash
-OBSIDIAN_VAULT="/path/to/your/vault" uv run python3 tests/test_setup.py
+DATABASE_URL="postgresql://localhost/obsidian_brain" \
+OBSIDIAN_VAULT="/path/to/your/vault" \
+uv run python3 tests/test_setup.py
 ```
 
 ### 5. Configure Claude Desktop

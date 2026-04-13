@@ -2,6 +2,24 @@
 
 Quick reference for diagnosing and resolving incidents with Obsidian Semantic MCP.
 
+## Install / Repair
+
+If the `osm` launcher is missing or stale, rerun the bootstrap installer for your platform:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.sh | bash
+```
+
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.ps1 | iex"
+```
+
+The bootstrap creates a platform-appropriate launcher in `~/.local/bin/`:
+- **macOS / Linux** — `osm` (bash script, marked executable)
+- **Windows** — `osm.cmd` (batch wrapper delegating to `scripts\osm.ps1`); invoked as `osm` from any terminal since Windows resolves `.cmd` automatically
+
+If you already cloned the repo, you can also run `uv run osm init` from the project root.
+
 ## Service Health
 
 ```bash

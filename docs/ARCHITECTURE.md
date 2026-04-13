@@ -2,7 +2,7 @@
 
 ## Overview
 
-Obsidian Semantic MCP is a local-first semantic memory layer for Claude Desktop. It indexes your Obsidian vault as vector embeddings and exposes search + CRUD via the Model Context Protocol (MCP).
+Obsidian Semantic MCP is a local-first semantic memory layer for Claude Desktop. It indexes your Obsidian vault as vector embeddings and exposes search + CRUD via the Model Context Protocol (MCP). Ollama may run either on the host or in Docker depending on the selected install mode.
 
 ## Component Map
 
@@ -31,7 +31,7 @@ PostgreSQL + pgvector                           src/dashboard.py ─────
     │  768-dim float vectors                        │  HTTP :8484
     │                                               ▼
     ▼                                           Browser UI
-Ollama / nomic-embed-text                      /api/stats
+Ollama (host or container) / nomic-embed-text   /api/stats
     │  HTTP :11434                             /api/search
     │  768-dim embeddings                      /api/reindex/*
     ▼
@@ -43,7 +43,7 @@ Your Obsidian vault ($OBSIDIAN_VAULT)
 
 ### Why pgvector instead of a dedicated vector DB?
 
-Pinecone, Weaviate, and Qdrant require running additional services or cloud accounts. pgvector runs inside the existing PostgreSQL container, keeping the stack at exactly three services (postgres, ollama, server). For vault sizes under 100K notes, pgvector's IVFFlat index is fast enough (sub-10ms queries).
+Pinecone, Weaviate, and Qdrant require running additional services or cloud accounts. pgvector runs inside the existing PostgreSQL container, keeping the stack compact. For vault sizes under 100K notes, pgvector's IVFFlat index is fast enough (sub-10ms queries).
 
 ### Why Ollama instead of API-based embeddings?
 
@@ -116,4 +116,4 @@ Claude calls search_vault(query, limit)
 
 - **Embedding backend:** Replace `embed()` in `server.py` with a different provider (HuggingFace, OpenAI) by swapping the HTTP call. The vector dimension must match the IVFFlat index (768 for nomic-embed-text).
 - **Additional MCP tools:** Add new `@server.call_tool()` handlers in `server.py`. Register the tool schema in `list_tools()`.
-- **Dashboard panels:** Add new `/api/<endpoint>` routes in `dashboard.py` and corresponding HTML panels in the `HTML` constant.
+- **Dashboard panels:** Add new `/api/<endpoint>` routes in `dashboard.py` and corresponding HTML panels in the `HTML` constant. Note: vault file counts, unindexed counts, and recent-note paths in the dashboard are computed across all configured vaults using the same `_should_skip_path()` filter as the indexer — stats and indexer always agree.
