@@ -38,6 +38,7 @@ uv run osm init
 > **Tip:** Run `uv run osm init --dry-run` first to preview every action without making any changes.
 >
 > `scripts/osm` (macOS/Linux) and `scripts/osm.ps1` (Windows PowerShell) are direct wrappers — if you prefer not to use `uv run`, they work identically without activating the venv.
+> New users can bootstrap without cloning manually: use `install.sh` on macOS/Linux or `install.ps1` on Windows.
 >
 > **One server, all projects:** `obsidian-semantic` is registered globally — running `osm init` from any other project is safe and idempotent. If already configured, it skips registration and informs you.
 >
