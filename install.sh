@@ -38,6 +38,14 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     info "Updating existing install at ${INSTALL_DIR}..."
     git -C "$INSTALL_DIR" pull --ff-only
     ok "Up to date"
+elif [ -e "$INSTALL_DIR" ]; then
+    backup="${INSTALL_DIR}.backup-$(date +%Y%m%d%H%M%S)"
+    warn "Existing non-git install directory found"
+    info "Moving it to ${backup}"
+    mv "$INSTALL_DIR" "$backup"
+    info "Cloning to ${INSTALL_DIR}..."
+    git clone --depth=1 "$REPO_URL" "$INSTALL_DIR"
+    ok "Cloned"
 else
     info "Cloning to ${INSTALL_DIR}..."
     git clone --depth=1 "$REPO_URL" "$INSTALL_DIR"
