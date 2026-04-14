@@ -13,6 +13,7 @@ Or via the scripts/osm wrapper:
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import platform
@@ -24,6 +25,12 @@ import time
 import urllib.request
 from pathlib import Path
 
+# Ensure stdout/stderr can handle Unicode on Windows (cp1252 etc.)
+if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if sys.stderr.encoding and sys.stderr.encoding.lower().replace("-", "") != "utf8":
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 
 # ── Terminal output ───────────────────────────────────────────────────────────
 
@@ -34,18 +41,34 @@ def _c(code, text):
     return f"\033[{code}m{text}\033[0m" if _TTY else text
 
 
-def ok(msg):    print(f"  {_c('92', '✓')}  {msg}")
-def warn(msg):  print(f"  {_c('93', '⚠')}  {msg}")
-def fail(msg):  print(f"  {_c('91', '✗')}  {msg}")
-def info(msg):  print(f"  {_c('94', '→')}  {msg}")
-def header(msg): print(f"\n{_c('1', msg)}")
-def hr():        print("─" * 60)
+def ok(msg):
+    print(f"  {_c('92', '✓')}  {msg}")
+
+
+def warn(msg):
+    print(f"  {_c('93', '⚠')}  {msg}")
+
+
+def fail(msg):
+    print(f"  {_c('91', '✗')}  {msg}")
+
+
+def info(msg):
+    print(f"  {_c('94', '→')}  {msg}")
+
+
+def header(msg):
+    print(f"\n{_c('1', msg)}")
+
+
+def hr():
+    print("─" * 60)
 
 
 # ── Dry-run state ─────────────────────────────────────────────────────────────
 
-DRY_RUN     = False
-_DRY_ACTIONS: list[str] = []   # collects every skipped action for the summary
+DRY_RUN = False
+_DRY_ACTIONS: list[str] = []  # collects every skipped action for the summary
 
 
 def _dry(label, detail=""):
@@ -56,6 +79,7 @@ def _dry(label, detail=""):
 
 
 # ── Subprocess helpers ────────────────────────────────────────────────────────
+
 
 def run(cmd, check=True, capture=False, env=None):
     if DRY_RUN:
@@ -74,6 +98,10 @@ def cmd_exists(name):
     return shutil.which(name) is not None
 
 
+def _stdin_is_tty():
+    return bool(getattr(sys.stdin, "isatty", lambda: False)())
+
+
 # ── Non-interactive params (set by CLI flags, consumed by prompt_*) ───────────
 
 # Keys: vault, pg_password, mode, persistent, data_dir,
@@ -83,12 +111,15 @@ _PARAMS: dict = {}
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
+
 def prompt(question, default=None, choices=None, param_key=None):
     # Non-interactive: use pre-supplied value from CLI flags
     if param_key and param_key in _PARAMS:
         val = str(_PARAMS[param_key])
         if choices and val not in choices:
-            fail(f"--{param_key.replace('_', '-')} {val!r} is not one of: {', '.join(choices)}")
+            fail(
+                f"--{param_key.replace('_', '-')} {val!r} is not one of: {', '.join(choices)}"
+            )
             sys.exit(1)
         info(f"{question}: {_c('1', val)}  (from --{param_key.replace('_', '-')})")
         return val
@@ -117,7 +148,12 @@ def prompt(question, default=None, choices=None, param_key=None):
 
 
 def confirm(question, default="y", param_key=None):
-    return prompt(question, default=default, choices=["y", "n"], param_key=param_key).lower() == "y"
+    return (
+        prompt(
+            question, default=default, choices=["y", "n"], param_key=param_key
+        ).lower()
+        == "y"
+    )
 
 
 def _prompt_single_vault():
@@ -198,8 +234,11 @@ def prompt_vault():
 
 
 def prompt_pg_password():
-    return prompt("Postgres password (used for the local Docker DB)",
-                  default="obsidian", param_key="pg_password")
+    return prompt(
+        "Postgres password (used for the local Docker DB)",
+        default="obsidian",
+        param_key="pg_password",
+    )
 
 
 def prompt_persistent_storage(include_ollama=False):
@@ -215,10 +254,15 @@ def prompt_persistent_storage(include_ollama=False):
     print()
     print("  Database storage:\n")
     print("    Named volume  — managed by Docker; wiped by  docker compose down -v")
-    print("    Bind mount    — lives in a local directory; survives  docker compose down -v")
+    print(
+        "    Bind mount    — lives in a local directory; survives  docker compose down -v"
+    )
     print()
-    if not confirm("Use a persistent bind mount? (recommended)", default="y",
-                   param_key="persistent"):
+    if not confirm(
+        "Use a persistent bind mount? (recommended)",
+        default="y",
+        param_key="persistent",
+    ):
         return None, None
 
     default_dir = str(Path.home() / ".local" / "share" / "obsidian-semantic-mcp")
@@ -228,7 +272,7 @@ def prompt_persistent_storage(include_ollama=False):
     raw = prompt("Local data directory", default=default_dir, param_key="data_dir")
     data_dir = Path(raw).expanduser().resolve()
 
-    pgdata_path      = str(data_dir / "pgdata")
+    pgdata_path = str(data_dir / "pgdata")
     ollama_data_path = str(data_dir / "ollama") if include_ollama else None
 
     for p in filter(None, [pgdata_path, ollama_data_path]):
@@ -246,14 +290,158 @@ def prompt_persistent_storage(include_ollama=False):
 PROJECT_ROOT = Path(__file__).parent.resolve()
 
 
+def _install_docker():
+    """Attempt to install Docker Desktop via the platform package manager."""
+    system = platform.system()
+
+    if system == "Darwin":
+        if not cmd_exists("brew"):
+            fail("Homebrew not found — install it first: https://brew.sh")
+            return False
+        info("Installing Docker Desktop via Homebrew…")
+        r = run(["brew", "install", "--cask", "docker"], check=False)
+        if r.returncode != 0:
+            fail("Docker installation failed")
+            return False
+        ok("Docker Desktop installed — please launch it from Applications")
+
+    elif system == "Windows":
+        if cmd_exists("winget"):
+            info("Installing Docker Desktop via winget…")
+            r = run(
+                [
+                    "winget",
+                    "install",
+                    "-e",
+                    "--id",
+                    "Docker.DockerDesktop",
+                    "--accept-source-agreements",
+                    "--accept-package-agreements",
+                ],
+                check=False,
+            )
+            if r.returncode != 0:
+                fail("Docker installation failed")
+                return False
+            ok("Docker Desktop installed — please launch it from the Start menu")
+        else:
+            fail(
+                "winget not found — install Docker Desktop manually: "
+                "https://docs.docker.com/get-docker/"
+            )
+            return False
+
+    elif system == "Linux":
+        # Prefer apt (Debian/Ubuntu) — most common desktop Linux
+        if cmd_exists("apt-get"):
+            info("Installing Docker Engine via apt…")
+            cmds = [
+                "curl -fsSL https://get.docker.com | sh",
+            ]
+            for c in cmds:
+                r = run(c, check=False)
+                if r.returncode != 0:
+                    fail("Docker installation failed")
+                    return False
+            ok("Docker Engine installed")
+        else:
+            fail(
+                "No supported Linux installer found — install Docker manually: "
+                "https://docs.docker.com/get-docker/"
+            )
+            return False
+    else:
+        fail(f"Auto-install not supported on {system}")
+        return False
+
+    return True
+
+
+def _start_docker_daemon():
+    """Attempt to start Docker Desktop / daemon."""
+    system = platform.system()
+
+    if system == "Darwin":
+        info("Starting Docker Desktop…")
+        run(["open", "-a", "Docker"], check=False)
+    elif system == "Windows":
+        docker_paths = [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            / "Docker"
+            / "Docker"
+            / "Docker Desktop.exe",
+        ]
+        for p in docker_paths:
+            if p.exists():
+                info("Starting Docker Desktop…")
+                subprocess.Popen(
+                    [str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                break
+        else:
+            warn("Could not find Docker Desktop executable — start it manually")
+            return False
+    elif system == "Linux":
+        info("Starting Docker daemon…")
+        run(["sudo", "systemctl", "start", "docker"], check=False)
+    else:
+        return False
+
+    # Poll for the daemon to become ready
+    info("Waiting for Docker daemon to start…")
+    for i in range(30):
+        time.sleep(2)
+        r = subprocess.run(["docker", "info"], capture_output=True)
+        if r.returncode == 0:
+            ok("Docker is running")
+            return True
+    fail("Docker daemon did not start in time — start it manually and re-run osm init")
+    return False
+
+
 def check_docker():
     if not cmd_exists("docker"):
-        fail("Docker not found — install Docker Desktop: https://docs.docker.com/get-docker/")
-        return False
+        fail("Docker not found")
+        if DRY_RUN:
+            _dry("install Docker Desktop")
+            return True
+        if not _stdin_is_tty():
+            fail(
+                "Docker is missing and stdin is not interactive — "
+                "install Docker manually and re-run osm init"
+            )
+            return False
+        if confirm("Install Docker Desktop now?", default="y"):
+            if not _install_docker():
+                return False
+            # After install, binary may not be on PATH in this session
+            if not cmd_exists("docker"):
+                warn("Docker was installed but is not on PATH yet")
+                info("Please restart your terminal and re-run: osm init")
+                return False
+        else:
+            info("Install Docker Desktop manually: https://docs.docker.com/get-docker/")
+            return False
+
     r = run(["docker", "info"], check=False, capture=True)
     if r.returncode != 0:
-        fail("Docker daemon is not running — start Docker Desktop first")
-        return False
+        fail("Docker daemon is not running")
+        if DRY_RUN:
+            _dry("start Docker Desktop")
+            return True
+        if not _stdin_is_tty():
+            fail(
+                "Docker daemon is not running and stdin is not interactive — "
+                "start Docker Desktop manually and re-run osm init"
+            )
+            return False
+        if confirm("Start Docker Desktop now?", default="y"):
+            if not _start_docker_daemon():
+                return False
+        else:
+            info("Start Docker Desktop and re-run: osm init")
+            return False
+
     ok("Docker is running")
     return True
 
@@ -308,7 +496,15 @@ def _default_ssh_key():
 
 def _test_ssh_connection(host: str, user: str, port: int, key_path: str | None) -> bool:
     """Test SSH connectivity before launching the tunnel."""
-    cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+    cmd = [
+        "ssh",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+    ]
     if key_path:
         cmd += ["-i", key_path]
     if port != 22:
@@ -335,10 +531,14 @@ def open_ssh_tunnel(user, host, remote_port, local_port, key_path=None):
     # to $HOME/.ssh/known_hosts before running osm init to eliminate this window.
     cmd = [
         "ssh",
-        "-N", "-f",                          # background, no remote command
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "ExitOnForwardFailure=yes",
-        "-L", f"{local_port}:localhost:{remote_port}",
+        "-N",
+        "-f",  # background, no remote command
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-L",
+        f"{local_port}:localhost:{remote_port}",
         f"{user}@{host}",
     ]
     if key_path:
@@ -363,8 +563,9 @@ def prompt_ssh_credentials():
     print()
     remote_host = prompt("Remote host (IP address or hostname)", param_key="ssh_host")
     remote_port = prompt("Remote Ollama port", default="11434", param_key="ssh_port")
-    ssh_user    = prompt("SSH username", default=os.environ.get("USER", "ubuntu"),
-                         param_key="ssh_user")
+    ssh_user = prompt(
+        "SSH username", default=os.environ.get("USER", "ubuntu"), param_key="ssh_user"
+    )
 
     key_path = None
     if "ssh_key" in _PARAMS:
@@ -380,7 +581,9 @@ def prompt_ssh_credentials():
         if auth == "1":
             default_key = _default_ssh_key()
             default_fallback = str(Path.home() / ".ssh" / "id_ed25519")
-            raw = prompt("Path to SSH private key", default=default_key or default_fallback)
+            raw = prompt(
+                "Path to SSH private key", default=default_key or default_fallback
+            )
             key_path = str(Path(raw).expanduser().resolve())
             if not Path(key_path).exists():
                 warn(f"Key file not found: {key_path}")
@@ -391,16 +594,20 @@ def prompt_ssh_credentials():
 
     if key_path:
         import stat
+
         kp = Path(key_path)
         if kp.exists():
             key_stat = os.stat(kp)
             if key_stat.st_mode & (stat.S_IRGRP | stat.S_IROTH):
-                warn(f"SSH key {key_path} has too-open permissions. Run: chmod 600 {key_path}")
+                warn(
+                    f"SSH key {key_path} has too-open permissions. Run: chmod 600 {key_path}"
+                )
 
     return ssh_user, remote_host, int(remote_port), key_path
 
 
 # ── Vault and model helpers ───────────────────────────────────────────────────
+
 
 def _validate_vault(vault_path: str) -> tuple[bool, str]:
     """Check that vault path is a valid Obsidian vault."""
@@ -431,8 +638,15 @@ def _verify_ollama_model(ollama_url: str, model: str) -> bool:
 
 # ── .env writer (runtime only — gitignored) ───────────────────────────────────
 
-def write_env(vault, pg_password, ollama_url, ssh_params=None,
-              pgdata_path=None, ollama_data_path=None):
+
+def write_env(
+    vault,
+    pg_password,
+    ollama_url,
+    ssh_params=None,
+    pgdata_path=None,
+    ollama_data_path=None,
+):
     """
     Write .env in the project root at runtime. This file is gitignored.
 
@@ -490,6 +704,7 @@ def write_env(vault, pg_password, ollama_url, ssh_params=None,
 
 # ── Claude Code CLI registration ──────────────────────────────────────────────
 
+
 def _claude_cli_already_registered() -> bool:
     """Return True if obsidian-semantic is already in the MCP list."""
     r = run(["claude", "mcp", "list"], check=False, capture=True)
@@ -520,7 +735,9 @@ def register_claude_cli(entry):
         return
 
     if _claude_cli_already_registered():
-        ok("Claude Code CLI: obsidian-semantic already registered — global, shared across all projects")
+        ok(
+            "Claude Code CLI: obsidian-semantic already registered — global, shared across all projects"
+        )
         return
 
     cmd_args = entry.get("args", [])
@@ -540,10 +757,17 @@ def register_claude_cli(entry):
 
 # ── Claude Desktop config ─────────────────────────────────────────────────────
 
+
 def _claude_cfg_path():
     system = platform.system()
     if system == "Darwin":
-        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Claude"
+            / "claude_desktop_config.json"
+        )
     if system == "Linux":
         return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
     if system == "Windows":
@@ -566,7 +790,9 @@ def update_claude_config(entry):
         except json.JSONDecodeError:
             warn(f"Could not parse {path} — mcpServers section will be reset")
     if cfg.get("mcpServers", {}).get("obsidian-semantic"):
-        ok(f"Claude Desktop: obsidian-semantic already configured — global, shared across all projects")
+        ok(
+            f"Claude Desktop: obsidian-semantic already configured — global, shared across all projects"
+        )
         return
     cfg.setdefault("mcpServers", {})["obsidian-semantic"] = entry
     # Show the full merged config so the user can see what other entries are preserved
@@ -612,6 +838,7 @@ def _native_entry(vault, db_url):
 
 
 # ── Docker compose helpers ────────────────────────────────────────────────────
+
 
 def compose(args, env=None):
     return run(
@@ -675,8 +902,9 @@ def compose_up(services=None, env=None):
     kw: dict = {}
     if env:
         kw["env"] = env
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, **kw)
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kw
+    )
     for line in proc.stdout:
         print(line, end="", flush=True)
     proc.wait()
@@ -687,9 +915,22 @@ def wait_for_postgres(timeout=90):
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = run(
-            ["docker", "compose", "--project-directory", str(PROJECT_ROOT),
-             "exec", "-T", "postgres", "pg_isready", "-U", "obsidian", "-d", "obsidian_brain"],
-            check=False, capture=True,
+            [
+                "docker",
+                "compose",
+                "--project-directory",
+                str(PROJECT_ROOT),
+                "exec",
+                "-T",
+                "postgres",
+                "pg_isready",
+                "-U",
+                "obsidian",
+                "-d",
+                "obsidian_brain",
+            ],
+            check=False,
+            capture=True,
         )
         if r.returncode == 0:
             ok("Postgres is ready")
@@ -700,6 +941,7 @@ def wait_for_postgres(timeout=90):
 
 
 # ── Install modes ─────────────────────────────────────────────────────────────
+
 
 def mode_native_macos():
     header("Native install  (Homebrew + local Postgres + local Ollama)")
@@ -789,13 +1031,23 @@ def mode_full_docker():
     vaults = prompt_vault()
     pg_pw = prompt_pg_password()
     pgdata_path, ollama_data_path = prompt_persistent_storage(include_ollama=True)
-    write_env(vaults, pg_pw, "http://ollama:11434",
-              pgdata_path=pgdata_path, ollama_data_path=ollama_data_path)
+    write_env(
+        vaults,
+        pg_pw,
+        "http://ollama:11434",
+        pgdata_path=pgdata_path,
+        ollama_data_path=ollama_data_path,
+    )
     _write_compose_override(vaults)
 
     header("Starting all services")
-    env = {**os.environ, "OBSIDIAN_VAULT": vaults[0], "POSTGRES_PASSWORD": pg_pw,
-           "OLLAMA_URL": "http://ollama:11434", "COMPOSE_PROFILES": "full-docker"}
+    env = {
+        **os.environ,
+        "OBSIDIAN_VAULT": vaults[0],
+        "POSTGRES_PASSWORD": pg_pw,
+        "OLLAMA_URL": "http://ollama:11434",
+        "COMPOSE_PROFILES": "full-docker",
+    }
     if len(vaults) > 1:
         env["OBSIDIAN_VAULTS"] = ",".join(f"/{Path(v).name}" for v in vaults)
     if pgdata_path:
@@ -813,7 +1065,9 @@ def mode_full_docker():
 
 
 def mode_docker_host_ollama():
-    header("Docker + host Ollama  (Postgres in Docker, Ollama already running on this machine)")
+    header(
+        "Docker + host Ollama  (Postgres in Docker, Ollama already running on this machine)"
+    )
     hr()
 
     if not check_docker() or not check_compose():
@@ -827,8 +1081,10 @@ def mode_docker_host_ollama():
     # host.docker.internal resolves to the Docker host on macOS and Windows;
     # on Linux you may need to pass --add-host or use the bridge IP.
     system = platform.system()
-    ollama_host = "host.docker.internal" if system in ("Darwin", "Windows") else "172.17.0.1"
-    ollama_url  = f"http://{ollama_host}:11434"
+    ollama_host = (
+        "host.docker.internal" if system in ("Darwin", "Windows") else "172.17.0.1"
+    )
+    ollama_url = f"http://{ollama_host}:11434"
 
     vaults = prompt_vault()
     pg_pw = prompt_pg_password()
@@ -837,7 +1093,12 @@ def mode_docker_host_ollama():
     _write_compose_override(vaults)
 
     header("Starting services (postgres, mcp-server, dashboard)")
-    env = {**os.environ, "OBSIDIAN_VAULT": vaults[0], "POSTGRES_PASSWORD": pg_pw, "OLLAMA_URL": ollama_url}
+    env = {
+        **os.environ,
+        "OBSIDIAN_VAULT": vaults[0],
+        "POSTGRES_PASSWORD": pg_pw,
+        "OLLAMA_URL": ollama_url,
+    }
     if len(vaults) > 1:
         env["OBSIDIAN_VAULTS"] = ",".join(f"/{Path(v).name}" for v in vaults)
     if pgdata_path:
@@ -875,10 +1136,11 @@ def _prompt_vault_location(ssh_user, ssh_host, key_path=None):
             return vaults[0] if len(vaults) == 1 else vaults
 
     # Remote vault via sshfs
-    remote_vault = prompt("Path to vault on remote machine (absolute)",
-                          param_key="vault_remote")
+    remote_vault = prompt(
+        "Path to vault on remote machine (absolute)", param_key="vault_remote"
+    )
     default_mount = str(Path.home() / "obsidian-remote-vault")
-    mount_point   = prompt("Local mount point", default=default_mount)
+    mount_point = prompt("Local mount point", default=default_mount)
 
     mount_path = Path(mount_point).expanduser().resolve()
     if not DRY_RUN:
@@ -914,7 +1176,9 @@ def _prompt_vault_location(ssh_user, ssh_host, key_path=None):
 
 
 def mode_docker_remote_ollama():
-    header("Docker + remote Ollama  (Postgres in Docker, Ollama on another host via SSH)")
+    header(
+        "Docker + remote Ollama  (Postgres in Docker, Ollama on another host via SSH)"
+    )
     hr()
 
     if not check_docker() or not check_compose():
@@ -933,7 +1197,9 @@ def mode_docker_remote_ollama():
     if not DRY_RUN and not _test_ssh_connection(remote_host, ssh_user, 22, key_path):
         print()
         fail(f"SSH connection test failed: cannot reach {ssh_user}@{remote_host}:22")
-        print(f"     Check: SSH key path, host reachability, and that SSH is enabled on the remote.")
+        print(
+            f"     Check: SSH key path, host reachability, and that SSH is enabled on the remote."
+        )
         print()
         if not confirm("Continue anyway?", default="n"):
             fail("Aborted — fix SSH connectivity and re-run osm init")
@@ -941,8 +1207,9 @@ def mode_docker_remote_ollama():
     elif not DRY_RUN:
         ok(f"SSH connection to {ssh_user}@{remote_host} succeeded")
 
-    tunnel_ok = open_ssh_tunnel(ssh_user, remote_host, remote_port,
-                                local_tunnel_port, key_path)
+    tunnel_ok = open_ssh_tunnel(
+        ssh_user, remote_host, remote_port, local_tunnel_port, key_path
+    )
     if tunnel_ok:
         time.sleep(1)
         check_ollama_at("localhost", local_tunnel_port)
@@ -952,9 +1219,11 @@ def mode_docker_remote_ollama():
 
     # Docker containers reach the host-side tunnel via host.docker.internal
     # (macOS/Windows Docker Desktop) or the bridge gateway (Linux).
-    system      = platform.system()
-    tunnel_host = "host.docker.internal" if system in ("Darwin", "Windows") else "172.17.0.1"
-    ollama_url  = f"http://{tunnel_host}:{local_tunnel_port}"
+    system = platform.system()
+    tunnel_host = (
+        "host.docker.internal" if system in ("Darwin", "Windows") else "172.17.0.1"
+    )
+    ollama_url = f"http://{tunnel_host}:{local_tunnel_port}"
 
     # ── Vault path ────────────────────────────────────────────────────────────
     header("Obsidian vault")
@@ -965,19 +1234,23 @@ def mode_docker_remote_ollama():
     pg_pw = prompt_pg_password()
     pgdata_path, _ = prompt_persistent_storage(include_ollama=False)
     ssh_params = {
-        "user":        ssh_user,
-        "host":        remote_host,
+        "user": ssh_user,
+        "host": remote_host,
         "remote_port": remote_port,
-        "local_port":  local_tunnel_port,
-        "key_path":    key_path,
+        "local_port": local_tunnel_port,
+        "key_path": key_path,
     }
     write_env(vaults, pg_pw, ollama_url, ssh_params=ssh_params, pgdata_path=pgdata_path)
     _write_compose_override(vaults)
 
     # ── Start Docker services ─────────────────────────────────────────────────
     header("Starting services (postgres, mcp-server, dashboard)")
-    env = {**os.environ, "OBSIDIAN_VAULT": vaults[0], "POSTGRES_PASSWORD": pg_pw,
-           "OLLAMA_URL": ollama_url}
+    env = {
+        **os.environ,
+        "OBSIDIAN_VAULT": vaults[0],
+        "POSTGRES_PASSWORD": pg_pw,
+        "OLLAMA_URL": ollama_url,
+    }
     if len(vaults) > 1:
         env["OBSIDIAN_VAULTS"] = ",".join(f"/{Path(v).name}" for v in vaults)
     if pgdata_path:
@@ -993,6 +1266,7 @@ def mode_docker_remote_ollama():
 
 
 # ── Summary printers ──────────────────────────────────────────────────────────
+
 
 def _done_docker_remote(ssh_user, ssh_host, remote_port, local_port, key_path):
     _link_osm_to_path()
@@ -1052,9 +1326,11 @@ def _link_osm_to_path():
     it tries the original install path first, then falls back to the XDG
     standard location, then prints a clear reinstall error.
     """
-    bin_dir  = Path.home() / ".local" / "bin"
+    bin_dir = Path.home() / ".local" / "bin"
     launcher = _osm_launcher_path()
-    xdg_data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
+    xdg_data = Path(
+        os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
+    )
 
     if platform.system() == "Windows":
         xdg_ps1 = xdg_data / "obsidian-semantic-mcp" / "scripts" / "osm.ps1"
@@ -1067,17 +1343,17 @@ def _link_osm_to_path():
             f'set "_XDG={xdg_ps1}"\n'
             'if exist "%_PRIMARY%" (\n'
             '    powershell -NoProfile -ExecutionPolicy Bypass -File "%_PRIMARY%" %*\n'
-            '    exit /b %ERRORLEVEL%\n'
-            ')\n'
+            "    exit /b %ERRORLEVEL%\n"
+            ")\n"
             'if exist "%_XDG%" (\n'
             '    powershell -NoProfile -ExecutionPolicy Bypass -File "%_XDG%" %*\n'
-            '    exit /b %ERRORLEVEL%\n'
-            ')\n'
-            'echo osm: installation not found 1>&2\n'
-            'echo   Looked in: %_PRIMARY% 1>&2\n'
-            'echo   And:       %_XDG% 1>&2\n'
+            "    exit /b %ERRORLEVEL%\n"
+            ")\n"
+            "echo osm: installation not found 1>&2\n"
+            "echo   Looked in: %_PRIMARY% 1>&2\n"
+            "echo   And:       %_XDG% 1>&2\n"
             'echo   Reinstall: powershell -c "irm https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.ps1 | iex" 1>&2\n'
-            'exit /b 1\n'
+            "exit /b 1\n"
         )
         if DRY_RUN:
             _dry(f"write {launcher}", "Windows batch launcher (delegates to osm.ps1)")
@@ -1104,20 +1380,25 @@ def _link_osm_to_path():
             '    exec "$_PRIMARY" "$@"\n'
             'elif [ -f "$_XDG" ]; then\n'
             '    exec "$_XDG" "$@"\n'
-            'else\n'
+            "else\n"
             '    echo "osm: installation not found" >&2\n'
             '    echo "  Looked in: $_PRIMARY" >&2\n'
             '    echo "  And:       $_XDG" >&2\n'
             '    echo "  Reinstall: curl -fsSL $_INSTALL_URL | bash" >&2\n'
-            '    exit 1\n'
-            'fi\n'
+            "    exit 1\n"
+            "fi\n"
         )
         if DRY_RUN:
-            _dry(f"write {launcher}", "self-contained launcher (survives repo move/delete)")
+            _dry(
+                f"write {launcher}",
+                "self-contained launcher (survives repo move/delete)",
+            )
             return
         bin_dir.mkdir(parents=True, exist_ok=True)
         try:
-            launcher.unlink(missing_ok=True)  # remove symlink before writing — write_text follows symlinks
+            launcher.unlink(
+                missing_ok=True
+            )  # remove symlink before writing — write_text follows symlinks
             launcher.write_text(script)
             launcher.chmod(0o755)
             primary.chmod(0o755)
@@ -1154,6 +1435,7 @@ def _done_docker():
 
 # ── Tunnel command ────────────────────────────────────────────────────────────
 
+
 def _read_env():
     """Parse .env into a dict (simple KEY=VALUE, ignores comments)."""
     env_path = PROJECT_ROOT / ".env"
@@ -1174,17 +1456,19 @@ def cmd_tunnel():
     hr()
 
     env = _read_env()
-    user        = env.get("OSM_SSH_USER")
-    host        = env.get("OSM_SSH_HOST")
+    user = env.get("OSM_SSH_USER")
+    host = env.get("OSM_SSH_HOST")
     remote_port = env.get("OSM_SSH_REMOTE_PORT", "11434")
-    local_port  = env.get("OSM_SSH_LOCAL_PORT", "11435")
-    key_path    = env.get("OSM_SSH_KEY")
+    local_port = env.get("OSM_SSH_LOCAL_PORT", "11435")
+    key_path = env.get("OSM_SSH_KEY")
 
     if not user or not host:
         fail("No SSH config found in .env — run osm init first")
         sys.exit(1)
 
-    info(f"Reconnecting: {user}@{host} (tunnel localhost:{local_port} → {host}:{remote_port})")
+    info(
+        f"Reconnecting: {user}@{host} (tunnel localhost:{local_port} → {host}:{remote_port})"
+    )
     ok_flag = open_ssh_tunnel(user, host, int(remote_port), int(local_port), key_path)
     if ok_flag:
         time.sleep(1)
@@ -1195,13 +1479,23 @@ def cmd_tunnel():
 
 # ── Status command ────────────────────────────────────────────────────────────
 
+
 def cmd_status():
     header("OSM Status")
     hr()
 
     r = run(
-        ["docker", "compose", "--project-directory", str(PROJECT_ROOT), "ps", "--format", "table"],
-        check=False, capture=True,
+        [
+            "docker",
+            "compose",
+            "--project-directory",
+            str(PROJECT_ROOT),
+            "ps",
+            "--format",
+            "table",
+        ],
+        check=False,
+        capture=True,
     )
     if r.returncode == 0 and r.stdout.strip():
         print(r.stdout)
@@ -1226,6 +1520,7 @@ def cmd_status():
 
 # ── Rebuild command ───────────────────────────────────────────────────────────
 
+
 def cmd_rebuild():
     header("Rebuilding Docker images")
     hr()
@@ -1236,12 +1531,15 @@ def cmd_rebuild():
 
 # ── Remove command ────────────────────────────────────────────────────────────
 
+
 def cmd_remove():
     header("OSM Remove — tear down Obsidian Semantic MCP")
     hr()
     print()
     warn("This will:")
-    print("    • Stop and remove all Docker containers and volumes  (all indexed embeddings lost)")
+    print(
+        "    • Stop and remove all Docker containers and volumes  (all indexed embeddings lost)"
+    )
     print("    • Delete .env from this project")
     print("    • Remove obsidian-semantic from claude_desktop_config.json")
     print("    • Remove obsidian-semantic from Claude Code CLI  ($HOME/.claude.json)")
@@ -1257,13 +1555,23 @@ def cmd_remove():
     header("Stopping Docker services")
     r = run(
         ["docker", "compose", "--project-directory", str(PROJECT_ROOT), "ps", "-q"],
-        check=False, capture=True,
+        check=False,
+        capture=True,
     )
     if not DRY_RUN and not (r.stdout or "").strip():
         info("No running Docker services found — skipping")
     else:
-        run(["docker", "compose", "--project-directory", str(PROJECT_ROOT), "down", "-v"],
-            check=False)
+        run(
+            [
+                "docker",
+                "compose",
+                "--project-directory",
+                str(PROJECT_ROOT),
+                "down",
+                "-v",
+            ],
+            check=False,
+        )
         if not DRY_RUN:
             ok("Docker services stopped and volumes removed")
 
@@ -1282,7 +1590,9 @@ def cmd_remove():
     header("Updating Claude Desktop config")
     cfg_path = _claude_cfg_path()
     if not cfg_path:
-        warn("Unknown platform — remove obsidian-semantic from claude_desktop_config.json manually")
+        warn(
+            "Unknown platform — remove obsidian-semantic from claude_desktop_config.json manually"
+        )
     elif DRY_RUN:
         _dry(f"remove obsidian-semantic entry from {cfg_path}")
     elif cfg_path.exists():
@@ -1307,8 +1617,10 @@ def cmd_remove():
         if DRY_RUN:
             _dry("claude mcp remove obsidian-semantic")
         else:
-            r = run(["claude", "mcp", "remove", "--scope", "user", "obsidian-semantic"],
-                    check=False)
+            r = run(
+                ["claude", "mcp", "remove", "--scope", "user", "obsidian-semantic"],
+                check=False,
+            )
             if r.returncode == 0:
                 ok("Removed obsidian-semantic from Claude Code CLI")
             else:
@@ -1338,26 +1650,51 @@ def cmd_remove():
 # ── Install mode tables ───────────────────────────────────────────────────────
 
 MODES_MACOS = {
-    "1": ("Native",                  "Homebrew + local Postgres + local Ollama",         mode_native_macos),
-    "2": ("Docker + host Ollama",    "Postgres in Docker, Ollama already on this Mac",   mode_docker_host_ollama),
-    "3": ("Full Docker",             "Everything in containers  (recommended)",           mode_full_docker),
-    "4": ("Docker + remote Ollama",  "Postgres in Docker, Ollama on another machine via SSH", mode_docker_remote_ollama),
+    "1": ("Native", "Homebrew + local Postgres + local Ollama", mode_native_macos),
+    "2": (
+        "Docker + host Ollama",
+        "Postgres in Docker, Ollama already on this Mac",
+        mode_docker_host_ollama,
+    ),
+    "3": ("Full Docker", "Everything in containers  (recommended)", mode_full_docker),
+    "4": (
+        "Docker + remote Ollama",
+        "Postgres in Docker, Ollama on another machine via SSH",
+        mode_docker_remote_ollama,
+    ),
 }
 
 MODES_LINUX = {
-    "1": ("Docker + host Ollama",    "Postgres in Docker, Ollama on this machine",       mode_docker_host_ollama),
-    "2": ("Full Docker",             "Everything in containers  (recommended)",           mode_full_docker),
-    "3": ("Docker + remote Ollama",  "Postgres in Docker, Ollama on another machine",    mode_docker_remote_ollama),
+    "1": (
+        "Docker + host Ollama",
+        "Postgres in Docker, Ollama on this machine",
+        mode_docker_host_ollama,
+    ),
+    "2": ("Full Docker", "Everything in containers  (recommended)", mode_full_docker),
+    "3": (
+        "Docker + remote Ollama",
+        "Postgres in Docker, Ollama on another machine",
+        mode_docker_remote_ollama,
+    ),
 }
 
 MODES_WINDOWS = {
-    "1": ("Docker + host Ollama",    "Postgres in Docker, Ollama already on this PC",    mode_docker_host_ollama),
-    "2": ("Full Docker",             "Everything in containers  (recommended)",           mode_full_docker),
-    "3": ("Docker + remote Ollama",  "Postgres in Docker, Ollama on another machine",    mode_docker_remote_ollama),
+    "1": (
+        "Docker + host Ollama",
+        "Postgres in Docker, Ollama already on this PC",
+        mode_docker_host_ollama,
+    ),
+    "2": ("Full Docker", "Everything in containers  (recommended)", mode_full_docker),
+    "3": (
+        "Docker + remote Ollama",
+        "Postgres in Docker, Ollama on another machine",
+        mode_docker_remote_ollama,
+    ),
 }
 
 
 # ── Init command ──────────────────────────────────────────────────────────────
+
 
 def cmd_init():
     print()
@@ -1367,7 +1704,7 @@ def cmd_init():
 
     system = platform.system()
     if system == "Darwin":
-        ver  = platform.mac_ver()[0]
+        ver = platform.mac_ver()[0]
         arch = platform.machine()
         print(f"\n  Detected: macOS {ver} ({arch})\n")
         modes = MODES_MACOS
@@ -1403,8 +1740,10 @@ def cmd_init():
         rec_key = "2" if system == "Darwin" else "1"
         rec_name = modes[rec_key][0]
         print(f"  {_c('92', '✓')}  Ollama is already running on this machine.")
-        print(f"     {_c('93', f'Recommended: {rec_key}) {rec_name}')}"
-              f"  — skips the ~3 GB Ollama image pull")
+        print(
+            f"     {_c('93', f'Recommended: {rec_key}) {rec_name}')}"
+            f"  — skips the ~3 GB Ollama image pull"
+        )
         print()
 
     choice = prompt("Choose", choices=list(modes.keys()), param_key="mode")
@@ -1427,63 +1766,87 @@ def cmd_help():
         print(f"    {_c('1', f'osm {name:<10}')}  {desc}")
     print()
     print(f"  {_c('1', 'Flags:')}\n")
-    print(f"    {_c('1', '--dry-run')}              Print every action that would run — make no changes")
-    print(f"    {_c('1', '--yes')}                 Skip confirmation prompts  (use with: osm remove)")
+    print(
+        f"    {_c('1', '--dry-run')}              Print every action that would run — make no changes"
+    )
+    print(
+        f"    {_c('1', '--yes')}                 Skip confirmation prompts  (use with: osm remove)"
+    )
     print()
-    print(f"  {_c('1', 'init flags')}  (skip interactive prompts — usable from scripts or AI agents)\n")
-    print(f"    {_c('1', '--mode <1-4>')}          Installation mode (macOS: 1=native 2=docker+host-ollama 3=full-docker 4=remote-ollama)")
+    print(
+        f"  {_c('1', 'init flags')}  (skip interactive prompts — usable from scripts or AI agents)\n"
+    )
+    print(
+        f"    {_c('1', '--mode <1-4>')}          Installation mode (macOS: 1=native 2=docker+host-ollama 3=full-docker 4=remote-ollama)"
+    )
     print(f"    {_c('1', '--vault <path>')}         Absolute path to Obsidian vault")
-    print(f"    {_c('1', '--pg-password <pw>')}     Postgres password  (default: obsidian)")
-    print(f"    {_c('1', '--persistent')}           Use bind-mount volumes for persistent storage")
-    print(f"    {_c('1', '--no-persistent')}        Use named Docker volumes (wiped by down -v)")
-    print(f"    {_c('1', '--data-dir <path>')}      Bind-mount data directory  (implies --persistent)")
+    print(
+        f"    {_c('1', '--pg-password <pw>')}     Postgres password  (default: obsidian)"
+    )
+    print(
+        f"    {_c('1', '--persistent')}           Use bind-mount volumes for persistent storage"
+    )
+    print(
+        f"    {_c('1', '--no-persistent')}        Use named Docker volumes (wiped by down -v)"
+    )
+    print(
+        f"    {_c('1', '--data-dir <path>')}      Bind-mount data directory  (implies --persistent)"
+    )
     print(f"    {_c('1', '--ssh-host <host>')}      Remote Ollama host  (mode 4)")
     print(f"    {_c('1', '--ssh-user <user>')}      SSH username  (mode 4)")
-    print(f"    {_c('1', '--ssh-port <port>')}      Remote Ollama port  (default: 11434, mode 4)")
+    print(
+        f"    {_c('1', '--ssh-port <port>')}      Remote Ollama port  (default: 11434, mode 4)"
+    )
     print(f"    {_c('1', '--ssh-key <path>')}       SSH private key path  (mode 4)")
-    print(f"    {_c('1', '--vault-remote <path>')}  Vault path on remote machine — mount via sshfs  (mode 4)")
+    print(
+        f"    {_c('1', '--vault-remote <path>')}  Vault path on remote machine — mount via sshfs  (mode 4)"
+    )
     print()
     print(f"  {_c('1', 'Examples:')}\n")
     print(f"    osm init                                    # Interactive setup")
     print(f"    osm init --dry-run                          # Preview without changes")
     print(f"    osm init --mode 3 --vault /path/to/vault \\")
-    print(f"        --pg-password secret --persistent       # Non-interactive full Docker")
+    print(
+        f"        --pg-password secret --persistent       # Non-interactive full Docker"
+    )
     print(f"    osm init --mode 4 --vault /path/to/vault \\")
     print(f"        --ssh-host 203.0.113.5 --ssh-user ubuntu \\")
     print(f"        --ssh-key $HOME/.ssh/id_ed25519         # Remote Ollama via SSH")
     print(f"    osm status                                  # Check service health")
     print(f"    osm tunnel                                  # Reconnect SSH tunnel")
     print(f"    osm rebuild                                 # Rebuild Docker images")
-    print(f"    osm remove                                  # Stop services and wipe config")
+    print(
+        f"    osm remove                                  # Stop services and wipe config"
+    )
     print()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 COMMANDS = {
-    "init":    (cmd_init,    "Interactive setup wizard"),
-    "status":  (cmd_status,  "Check service health"),
-    "tunnel":  (cmd_tunnel,  "Reconnect SSH tunnel to remote Ollama host"),
+    "init": (cmd_init, "Interactive setup wizard"),
+    "status": (cmd_status, "Check service health"),
+    "tunnel": (cmd_tunnel, "Reconnect SSH tunnel to remote Ollama host"),
     "rebuild": (cmd_rebuild, "Rebuild Docker images and restart"),
-    "remove":  (cmd_remove,  "Stop services, delete volumes and config"),
-    "help":    (cmd_help,    "Show this help message"),
+    "remove": (cmd_remove, "Stop services, delete volumes and config"),
+    "help": (cmd_help, "Show this help message"),
 }
 
 
 _FLAG_MAP = {
     # flag name (without --) → _PARAMS key
-    "vault":        "vault",
-    "pg-password":  "pg_password",
-    "mode":         "mode",
-    "persistent":   "persistent",   # boolean, value "y"
-    "no-persistent":"persistent",   # boolean, value "n"
-    "data-dir":     "data_dir",
-    "ssh-host":     "ssh_host",
-    "ssh-user":     "ssh_user",
-    "ssh-port":     "ssh_port",
-    "ssh-key":      "ssh_key",
+    "vault": "vault",
+    "pg-password": "pg_password",
+    "mode": "mode",
+    "persistent": "persistent",  # boolean, value "y"
+    "no-persistent": "persistent",  # boolean, value "n"
+    "data-dir": "data_dir",
+    "ssh-host": "ssh_host",
+    "ssh-user": "ssh_user",
+    "ssh-port": "ssh_port",
+    "ssh-key": "ssh_key",
     "vault-remote": "vault_remote",
-    "yes":          "yes",          # boolean — skip all confirms in remove
+    "yes": "yes",  # boolean — skip all confirms in remove
 }
 
 
@@ -1522,7 +1885,11 @@ def _parse_flags(args):
                     params[_FLAG_MAP[k]] = v
                     i += 1
                     continue
-            elif key in _FLAG_MAP and i + 1 < len(args) and not args[i + 1].startswith("--"):
+            elif (
+                key in _FLAG_MAP
+                and i + 1 < len(args)
+                and not args[i + 1].startswith("--")
+            ):
                 params[_FLAG_MAP[key]] = args[i + 1]
                 i += 2
                 continue

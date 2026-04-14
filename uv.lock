@@ -574,7 +574,7 @@ wheels = [
 [[package]]
 name = "obsidian-semantic-mcp"
 version = "0.5.4"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "mcp" },

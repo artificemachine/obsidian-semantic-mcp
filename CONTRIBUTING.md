@@ -8,7 +8,7 @@ Thank you for your interest in contributing! This document covers everything you
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv) — fast Python package manager
-- Docker Desktop (for integration tests)
+- Docker Desktop (for integration tests) — `osm init` can install it for you, or install manually
 - Ollama running locally (`ollama serve`)
 
 ### Install

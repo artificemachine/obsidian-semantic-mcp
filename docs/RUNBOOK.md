@@ -107,6 +107,17 @@ osm tunnel
 curl http://localhost:11434/api/tags
 ```
 
+### Docker not found or not running
+
+`osm init` detects missing Docker and offers to install it automatically:
+- **macOS:** `brew install --cask docker`
+- **Windows:** `winget install Docker.DockerDesktop`
+- **Linux:** `curl -fsSL https://get.docker.com | sh`
+
+If Docker is installed but the daemon is not running, the wizard offers to start it and waits up to 60 seconds for it to become ready.
+
+To skip the prompt and install manually: https://docs.docker.com/get-docker/
+
 ### Claude Desktop can't connect to MCP server
 
 ```bash

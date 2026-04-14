@@ -111,15 +111,46 @@ class TestCheckDocker:
         monkeypatch.setattr(osm_init, "cmd_exists", lambda _: False)
         assert osm_init.check_docker() is False
 
+    def test_docker_not_installed_noninteractive_returns_false(self, monkeypatch):
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda _: False)
+        monkeypatch.setattr(osm_init.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(
+            osm_init,
+            "confirm",
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("confirm called")),
+        )
+        assert osm_init.check_docker() is False
+
     def test_daemon_not_running(self, monkeypatch):
         monkeypatch.setattr(osm_init, "cmd_exists", lambda _: True)
         monkeypatch.setattr(osm_init, "run", lambda *a, **kw: _cp(1))
+        assert osm_init.check_docker() is False
+
+    def test_daemon_not_running_noninteractive_returns_false(self, monkeypatch):
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda _: True)
+        monkeypatch.setattr(osm_init, "run", lambda *a, **kw: _cp(1))
+        monkeypatch.setattr(osm_init.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(
+            osm_init,
+            "confirm",
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("confirm called")),
+        )
         assert osm_init.check_docker() is False
 
     def test_docker_running(self, monkeypatch):
         monkeypatch.setattr(osm_init, "cmd_exists", lambda _: True)
         monkeypatch.setattr(osm_init, "run", lambda *a, **kw: _cp(0))
         assert osm_init.check_docker() is True
+
+
+class TestInstallDocker:
+    def test_linux_does_not_fall_back_to_brew(self, monkeypatch):
+        monkeypatch.setattr(osm_init.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda name: False)
+        calls = []
+        monkeypatch.setattr(osm_init, "run", lambda *a, **kw: calls.append(a[0]) or _cp(0))
+        assert osm_init._install_docker() is False
+        assert calls == []
 
 
 # ── check_compose ─────────────────────────────────────────────────────────────

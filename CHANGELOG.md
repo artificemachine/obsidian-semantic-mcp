@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `osm init` now offers to install Docker Desktop automatically when missing (`brew` on macOS, `winget` on Windows, `get.docker.com` on Linux)
+- `osm init` offers to start Docker Desktop when the daemon is not running and waits for it to become ready
+- `[build-system]` added to `pyproject.toml` so `uv` registers the `osm` console script entry point
+
+### Fixed
+- Unicode output (box-drawing, checkmarks) no longer crashes on Windows cp1252 consoles — stdout/stderr are wrapped with UTF-8 encoding
+
 ### Changed
 - Docker Hub CI workflow now runs tests before publishing and builds multi-arch images (amd64 + arm64)
 - Tests workflow is now callable as a reusable workflow

@@ -24,7 +24,7 @@ Start with the bootstrap installer for your platform. If you already cloned the 
 
 **Before you start:**
 - **`uv`** must be installed — `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS/Linux) or `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"` (Windows)
-- **Docker Desktop** must be installed and running (Windows: enable WSL2 backend)
+- **Docker Desktop** — the wizard will offer to install it automatically if missing (`brew` on macOS, `winget` on Windows, `get.docker.com` on Linux). On Windows, enable the WSL2 backend.
 - Know your vault path — in Obsidian: Settings → About → Vault location
 
 ### 1. Bootstrap and run the setup wizard
@@ -78,7 +78,7 @@ The wizard detects your OS and asks which installation mode you want:
 
 It then:
 - Sets up the local install directory and PATH shim
-- Installs prerequisites or verifies they already exist
+- Installs prerequisites or verifies they already exist (Docker is installed and started automatically if missing)
 - Pulls `nomic-embed-text` if needed
 - Writes a `.env` file (gitignored) with your vault path and credentials
 - Updates `claude_desktop_config.json` automatically
@@ -250,8 +250,8 @@ obsidian-semantic-mcp/
 
 - An Obsidian vault on your filesystem
 - **macOS native:** Homebrew (auto-installs everything else)
-- **Docker modes:** Docker Desktop (macOS/Linux/Windows)
-- **Windows:** Docker Desktop with WSL2 backend enabled, `uv` installed via `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
+- **Docker modes:** Docker Desktop (macOS/Linux/Windows) — the wizard offers to install it if missing via `brew` (macOS), `winget` (Windows), or `get.docker.com` (Linux), and starts the daemon automatically
+- **Windows:** WSL2 backend enabled, `uv` installed via `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
 
 ## MCP Tools
 
@@ -394,7 +394,7 @@ uv run python3 tests/test_e2e.py
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `uv: command not found` | `uv` not installed or not in PATH | Run `curl -LsSf https://astral.sh/uv/install.sh \| sh` then restart your terminal |
-| `Cannot connect to the Docker daemon` | Docker Desktop not running | Start Docker Desktop from Applications (macOS) or system tray (Windows/Linux) |
+| `Cannot connect to the Docker daemon` | Docker Desktop not running | The wizard offers to start it automatically; or start Docker Desktop manually from Applications (macOS) / system tray (Windows/Linux) |
 | `Permission denied: /path/to/vault` | Vault path not readable by Docker | On macOS: Docker Desktop → Settings → Resources → File Sharing — add your vault path |
 | `ModuleNotFoundError: No module named 'mcp'` | System Python instead of venv | Use `.venv/bin/python3` in config, or use Docker |
 | `ModuleNotFoundError: No module named 'psycopg2'` in Docker | Container built before venv PATH fix | `docker compose up -d --build mcp-server` |
