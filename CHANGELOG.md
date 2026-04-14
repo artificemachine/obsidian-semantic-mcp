@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-04-14
+
 ### Added
 - `osm dashboard` command — opens the monitoring dashboard (http://localhost:8484) in the default browser; warns if the stack is not running
 - `osm init` now offers to install Docker Desktop automatically when missing (`brew` on macOS, `winget` on Windows, `get.docker.com` on Linux)
