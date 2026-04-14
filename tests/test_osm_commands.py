@@ -1075,6 +1075,39 @@ class TestModeNativeMacos:
         osm_init.mode_native_macos()
         assert any("ollama" in str(c) for c in popen_cmds)
 
+    def test_native_macos_ensures_embedding_model_when_missing(self, tmp_path, monkeypatch):
+        self._setup(monkeypatch, tmp_path)
+        verify_calls = []
+        post_calls = []
+
+        def fake_verify(url, model):
+            verify_calls.append((url, model))
+            return len(verify_calls) > 1
+
+        class FakeResp:
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                return iter(())
+
+        monkeypatch.setattr(osm_init, "_verify_ollama_model", fake_verify)
+        monkeypatch.setattr(
+            osm_init.requests,
+            "post",
+            lambda url, json=None, timeout=None, stream=None: post_calls.append(
+                (url, json, timeout, stream)
+            ) or FakeResp(),
+        )
+        osm_init.mode_native_macos()
+        assert verify_calls == [
+            ("http://localhost:11434", "nomic-embed-text"),
+            ("http://localhost:11434", "nomic-embed-text"),
+        ]
+        assert post_calls == [
+            ("http://localhost:11434/api/pull", {"model": "nomic-embed-text"}, 600, True)
+        ]
+
     def test_happy_path(self, tmp_path, monkeypatch):
         self._setup(monkeypatch, tmp_path)
         osm_init.mode_native_macos()  # must not raise

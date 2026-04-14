@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import webbrowser
 from pathlib import Path
 
 # Ensure stdout/stderr can handle Unicode on Windows (cp1252 etc.)
@@ -288,6 +289,7 @@ def prompt_persistent_storage(include_ollama=False):
 # ── Prerequisite checks ───────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
+EMBED_MODEL = "nomic-embed-text"
 
 
 def _install_docker():
@@ -634,6 +636,56 @@ def _verify_ollama_model(ollama_url: str, model: str) -> bool:
         return bool(data.get("embedding"))
     except Exception:
         return False
+
+
+def _ensure_ollama_model(ollama_url: str, model: str = EMBED_MODEL) -> None:
+    """Pull the embedding model if it is not already available, then verify."""
+    header("Embedding model")
+    info(f"Checking whether {model} is available…")
+
+    if _verify_ollama_model(ollama_url, model):
+        ok(f"{model} already available — embeddings responding")
+        return
+
+    # Model not loaded — try pulling via the Ollama API (works for both
+    # local and remote Ollama instances reachable over HTTP).
+    info(f"Pulling {model} (first run may take a few minutes)…")
+    if DRY_RUN:
+        _dry(f"POST {ollama_url}/api/pull  model={model}")
+        return
+
+    try:
+        resp = requests.post(
+            f"{ollama_url}/api/pull",
+            json={"model": model},
+            timeout=600,
+            stream=True,
+        )
+        resp.raise_for_status()
+        # Ollama streams JSON status lines — consume them so the pull completes.
+        for line in resp.iter_lines():
+            pass
+    except Exception as exc:
+        warn(f"API pull failed ({exc})")
+        # Fallback: try the CLI if ollama is installed locally
+        if cmd_exists("ollama"):
+            info(f"Falling back to:  ollama pull {model}")
+            run(["ollama", "pull", model], check=False)
+        else:
+            warn(
+                f"Could not pull {model} — indexing will fail until the model is available"
+            )
+            info(f"Fix manually:  ollama pull {model}")
+            return
+
+    # Verify after pull
+    if _verify_ollama_model(ollama_url, model):
+        ok(f"{model} verified — embeddings responding")
+    else:
+        warn(
+            f"Model pull completed but verification failed — embeddings did not respond"
+        )
+        info(f"Try manually:  ollama pull {model}")
 
 
 # ── .env writer (runtime only — gitignored) ───────────────────────────────────
@@ -993,16 +1045,7 @@ def mode_native_macos():
             )
             time.sleep(2)
 
-    info("Pulling nomic-embed-text (first run may take a few minutes)…")
-    run(["ollama", "pull", "nomic-embed-text"])
-    ok("Model ready: nomic-embed-text")
-    if not DRY_RUN:
-        info("Verifying nomic-embed-text is available…")
-        if _verify_ollama_model("http://localhost:11434", "nomic-embed-text"):
-            ok("nomic-embed-text verified — embeddings responding")
-        else:
-            warn("Model verification failed — embeddings did not respond")
-            info("Try manually:  ollama pull nomic-embed-text")
+    _ensure_ollama_model("http://localhost:11434")
 
     # ── Python env ────────────────────────────────────────────────────────────
     header("Python environment")
@@ -1057,6 +1100,10 @@ def mode_full_docker():
     compose_up(env=env)
     wait_for_postgres()
 
+    # Ollama container exposes on host port 11435 (avoids conflict with host Ollama).
+    # Pull the embedding model so indexing works on first run.
+    _ensure_ollama_model("http://localhost:11435")
+
     header("Claude Desktop configuration")
     entry = _docker_entry()
     update_claude_config(entry)
@@ -1077,6 +1124,9 @@ def mode_docker_host_ollama():
         fail("Ollama is not running — start it first:  ollama serve")
         info("Then re-run:  osm init")
         sys.exit(1)
+
+    # Ensure the embedding model is pulled before starting services.
+    _ensure_ollama_model("http://localhost:11434")
 
     # host.docker.internal resolves to the Docker host on macOS and Windows;
     # on Linux you may need to pass --add-host or use the bridge IP.
@@ -1213,6 +1263,8 @@ def mode_docker_remote_ollama():
     if tunnel_ok:
         time.sleep(1)
         check_ollama_at("localhost", local_tunnel_port)
+        # Ensure the embedding model is pulled on the remote Ollama.
+        _ensure_ollama_model(f"http://localhost:{local_tunnel_port}")
     else:
         if not confirm("Tunnel failed — continue anyway?", default="n"):
             sys.exit(0)
@@ -1751,6 +1803,22 @@ def cmd_init():
     handler()
 
 
+# ── Dashboard command ─────────────────────────────────────────────────────────
+
+_DASHBOARD_URL = "http://localhost:8484"
+
+
+def cmd_dashboard():
+    """Open the monitoring dashboard in the default browser."""
+    try:
+        urllib.request.urlopen(_DASHBOARD_URL, timeout=3)
+        ok(f"Dashboard is running")
+    except Exception:
+        warn(f"Dashboard may not be running — opening anyway")
+    info(f"Opening {_DASHBOARD_URL}")
+    webbrowser.open(_DASHBOARD_URL)
+
+
 # ── Help command ──────────────────────────────────────────────────────────────
 
 _INSTALL_URL = "https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.sh"
@@ -1826,6 +1894,7 @@ def cmd_help():
 COMMANDS = {
     "init": (cmd_init, "Interactive setup wizard"),
     "status": (cmd_status, "Check service health"),
+    "dashboard": (cmd_dashboard, "Open monitoring dashboard in browser"),
     "tunnel": (cmd_tunnel, "Reconnect SSH tunnel to remote Ollama host"),
     "rebuild": (cmd_rebuild, "Rebuild Docker images and restart"),
     "remove": (cmd_remove, "Stop services, delete volumes and config"),

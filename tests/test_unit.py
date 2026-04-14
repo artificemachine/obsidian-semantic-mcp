@@ -930,3 +930,11 @@ class TestCIWorkflowPinning:
             "Found 'pip install shipguard' in the workflow — "
             "remove it and manage the version via pyproject.toml dev dependencies"
         )
+
+
+class TestDockerComposeOllamaModelPull:
+    def test_ollama_pull_service_exists(self):
+        compose = (Path(__file__).parent.parent / "docker-compose.yml").read_text()
+        assert "ollama-pull:" in compose
+        assert 'entrypoint: ["ollama", "pull", "nomic-embed-text"]' in compose
+        assert "OLLAMA_HOST: http://ollama:11434" in compose

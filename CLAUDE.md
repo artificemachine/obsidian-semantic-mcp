@@ -41,6 +41,7 @@ osm init                                              # Interactive setup wizard
 osm init --mode 3 --vault /path --persistent          # Non-interactive (agent/script friendly)
 osm init --dry-run                                    # Preview all actions without making changes
 osm status                                            # Check service health
+osm dashboard                                         # Open monitoring dashboard in browser
 osm tunnel                                            # Reconnect SSH tunnel (remote Ollama)
 osm rebuild                                           # Rebuild Docker images
 osm remove                                            # Stop services, wipe volumes and config

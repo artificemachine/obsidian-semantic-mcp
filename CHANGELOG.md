@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `osm dashboard` command — opens the monitoring dashboard (http://localhost:8484) in the default browser; warns if the stack is not running
 - `osm init` now offers to install Docker Desktop automatically when missing (`brew` on macOS, `winget` on Windows, `get.docker.com` on Linux)
 - `osm init` offers to start Docker Desktop when the daemon is not running and waits for it to become ready
 - `[build-system]` added to `pyproject.toml` so `uv` registers the `osm` console script entry point
