@@ -270,6 +270,15 @@ class TestWindowsLauncherScript:
         assert "& python3 $Wizard @args" not in script
 
 
+class TestUnixInstallerScript:
+    def test_reattaches_tty_before_wizard(self):
+        script = (Path(__file__).parent.parent / "install.sh").read_text()
+        assert "[ -t 0 ]" in script
+        assert "[ -r /dev/tty ]" in script
+        assert 'exec "$INSTALL_DIR/scripts/osm" init "$@" < /dev/tty' in script
+        assert "No interactive terminal available for the setup wizard" in script
+
+
 class TestLinkOsmToPath:
     """_link_osm_to_path() must write platform-appropriate launcher content."""
 

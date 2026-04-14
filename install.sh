@@ -74,4 +74,12 @@ printf '\n'
 
 # ── Run setup wizard ──────────────────────────────────────────────────────────
 
-exec "$INSTALL_DIR/scripts/osm" init "$@"
+if [ -t 0 ]; then
+    exec "$INSTALL_DIR/scripts/osm" init "$@"
+elif [ -r /dev/tty ]; then
+    # Reattach stdin to the user's terminal when the installer was piped in.
+    exec "$INSTALL_DIR/scripts/osm" init "$@" < /dev/tty
+else
+    fail "No interactive terminal available for the setup wizard"
+    exit 1
+fi
