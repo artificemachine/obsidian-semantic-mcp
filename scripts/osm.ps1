@@ -15,9 +15,9 @@ $ProjectRoot = Split-Path -Parent $ScriptDir
 $Wizard      = Join-Path $ProjectRoot "osm_init.py"
 
 if (Get-Command uv -ErrorAction SilentlyContinue) {
-    & uv run --project $ProjectRoot python3 $Wizard @args
+    & uv run --project $ProjectRoot python $Wizard @args
 } else {
-    & python3 $Wizard @args
+    & python $Wizard @args
 }
 
 exit $LASTEXITCODE

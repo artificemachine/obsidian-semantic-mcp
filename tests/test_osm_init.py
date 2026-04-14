@@ -259,6 +259,17 @@ class TestOsmLauncherPath:
         assert result == Path.home() / ".local" / "bin" / "osm.cmd"
 
 
+# ── Windows launcher script ──────────────────────────────────────────────────
+
+class TestWindowsLauncherScript:
+    def test_uses_python_not_python3(self):
+        script = (Path(__file__).parent.parent / "scripts" / "osm.ps1").read_text()
+        assert "uv run --project $ProjectRoot python $Wizard @args" in script
+        assert "& python $Wizard @args" in script
+        assert "uv run --project $ProjectRoot python3 $Wizard @args" not in script
+        assert "& python3 $Wizard @args" not in script
+
+
 class TestLinkOsmToPath:
     """_link_osm_to_path() must write platform-appropriate launcher content."""
 
