@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-04-14
+
+### Changed
+- Installer wizard and help banner now display the release version so users can verify the tagged build they are running
+
+---
+
 ## [0.5.5] — 2026-04-14
 
 ### Added

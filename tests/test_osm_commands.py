@@ -483,6 +483,11 @@ class TestWaitForPostgres:
 # ── cmd_help ──────────────────────────────────────────────────────────────────
 
 class TestCmdHelp:
+    def test_version_shown(self, capsys):
+        osm_init.cmd_help()
+        out = capsys.readouterr().out
+        assert f"v{osm_init.APP_VERSION}" in out
+
     def test_all_commands_listed(self, capsys):
         osm_init.cmd_help()
         out = capsys.readouterr().out
@@ -741,6 +746,14 @@ class TestCmdInit:
         osm_init._PARAMS["mode"] = "1"
         osm_init.cmd_init()
         assert called
+
+    def test_macos_header_shows_version(self, monkeypatch, capsys):
+        self._macos_env(monkeypatch)
+        self._stub_modes(monkeypatch, "MODES_MACOS", "1", lambda: None)
+        osm_init._PARAMS["mode"] = "1"
+        osm_init.cmd_init()
+        out = capsys.readouterr().out
+        assert f"v{osm_init.APP_VERSION}" in out
 
     def test_macos_mode2_docker_host_ollama(self, monkeypatch):
         self._macos_env(monkeypatch)
