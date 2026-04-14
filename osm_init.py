@@ -17,6 +17,7 @@ import io
 import json
 import os
 import platform
+from importlib.metadata import PackageNotFoundError, version
 import requests
 import shutil
 import subprocess
@@ -31,6 +32,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 if sys.stderr.encoding and sys.stderr.encoding.lower().replace("-", "") != "utf8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
+try:
+    APP_VERSION = version("obsidian-semantic-mcp")
+except PackageNotFoundError:
+    APP_VERSION = "0.5.6"
 
 
 # ── Terminal output ───────────────────────────────────────────────────────────
@@ -1751,7 +1757,7 @@ MODES_WINDOWS = {
 def cmd_init():
     print()
     hr()
-    print(_c("1", "  Obsidian Semantic MCP — Setup Wizard"))
+    print(_c("1", f"  Obsidian Semantic MCP v{APP_VERSION} — Setup Wizard"))
     hr()
 
     system = platform.system()
@@ -1825,7 +1831,7 @@ _INSTALL_URL = "https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-
 
 
 def cmd_help():
-    print(f"\n  {_c('1', 'osm')} — Obsidian Semantic MCP CLI\n")
+    print(f"\n  {_c('1', f'osm v{APP_VERSION}')} — Obsidian Semantic MCP CLI\n")
     print(f"  {_c('1', 'Install (one-liner):')}\n")
     print(f"    curl -fsSL {_INSTALL_URL} | bash\n")
     print(f"  {_c('1', 'Usage:')}  osm <command> [flags]\n")
