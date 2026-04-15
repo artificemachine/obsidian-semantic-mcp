@@ -45,3 +45,6 @@ shipguard.txt
 docker-compose.override.yml
 .serena/
 excalidraw.log
+
+# Accidental Windows/Git-Bash redirection artifact
+nul
