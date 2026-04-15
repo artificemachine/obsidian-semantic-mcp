@@ -22,6 +22,24 @@ No cloud services. No API keys. Everything runs locally.
 
 Start with the bootstrap installer for your platform. If you already cloned the repo, you can skip bootstrap and run `uv run osm init` from the project root.
 
+### First 60 seconds (new user)
+
+If you're in a fresh environment (no `osm` launcher yet), run these from the repo root:
+
+```bash
+# 1) Preview setup actions safely (recommended: persistent data)
+uv run osm init --dry-run --mode 1 --vault "/path/to/your/vault" --pg-password "obsidian" --persistent --data-dir "/path/to/data"
+
+# 2) Run setup for real
+uv run osm init --mode 1 --vault "/path/to/your/vault" --pg-password "obsidian" --persistent --data-dir "/path/to/data"
+
+# 3) Open the monitoring dashboard
+uv run osm dashboard
+```
+
+> On macOS, `--mode 1` is Native install. For Docker-first installs, use mode 3 on macOS or mode 2 on Linux/Windows.
+> For ephemeral/CI setups, use `--no-persistent` instead.
+
 **Before you start:**
 - **`uv`** must be installed — `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS/Linux) or `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"` (Windows)
 - **Docker Desktop** — the wizard will offer to install it automatically if missing (`brew` on macOS, `winget` on Windows, `get.docker.com` on Linux). On Windows, enable the WSL2 backend.
@@ -45,6 +63,18 @@ powershell -c "irm https://raw.githubusercontent.com/celstnblacc/obsidian-semant
 > If you prefer a manual checkout, clone the repo and run `uv run osm init` from the project root.
 >
 > **One server, all projects:** `obsidian-semantic` is registered globally — running `osm init` from any other project is safe and idempotent. If already configured, it skips registration and informs you.
+>
+> **OpenCode/GitHub Copilot note:** In this repository, `osm` means the **Obsidian Semantic MCP CLI**, not OpenStreetMap. In a new chat session, run commands explicitly (for example, `osm dashboard`) to avoid acronym ambiguity.
+>
+> **If `osm` is not found:** use `uv run osm <command>` from the repo root (for example, `uv run osm init --dry-run`).
+>
+> **Session starter (copy/paste):**
+> ```text
+> In this repo, "osm" means the obsidian-semantic-mcp CLI (not OpenStreetMap).
+> Please execute shell commands directly when I type them.
+> If `osm` is not found, use `uv run osm ...` from the repo root.
+> Examples: osm init, osm dashboard.
+> ```
 >
 > **Exit the wizard at any prompt:** type `q`, `quit`, `exit`, or `skip` — or press `Ctrl+C`.
 
@@ -187,6 +217,8 @@ Claude will automatically choose the right MCP tool (`search_vault`, `get_file`,
 
 Use `osm` to set up, manage, and tear down the stack. The wizard installs all prerequisites, configures Docker, and updates Claude Desktop automatically.
 
+`osm` in this repo means the Obsidian Semantic MCP CLI (not OpenStreetMap).
+
 | Command | Description |
 |---------|-------------|
 | `osm init` | Interactive setup wizard |
@@ -203,6 +235,35 @@ Use `osm` to set up, manage, and tear down the stack. The wizard installs all pr
 **`osm init` flags:** `--mode`, `--vault`, `--pg-password`, `--persistent` / `--no-persistent`, `--data-dir`, `--ssh-host`, `--ssh-user`, `--ssh-port`, `--ssh-key`, `--vault-remote`
 
 > **Windows launcher:** `osm init` installs `osm.cmd` into `%USERPROFILE%\.local\bin\`. Windows resolves `.cmd` automatically, so you invoke it as `osm` from any terminal. If `osm` is not found, add `%USERPROFILE%\.local\bin` to your `Path` environment variable.
+
+### Using with Claude Code, Codex, and OpenCode
+
+When you type `osm init` or `osm dashboard` directly in your terminal, those commands execute normally.
+
+In chat-based coding agents, a bare `osm ...` message can be interpreted as text (or as OpenStreetMap) instead of a shell command. To force execution, phrase it explicitly:
+
+- `Run osm init`
+- `Run osm dashboard`
+
+If the launcher is not installed yet (or not on PATH), use:
+
+- `Run uv run osm init --dry-run --mode 1 --vault <vault-path> --pg-password <password>`
+- `Run uv run osm dashboard`
+
+What to expect for new users:
+
+- First install: `osm init` sets up services and registers `obsidian-semantic` in global MCP config for that OS user.
+- Later sessions: re-running `osm init` is safe and idempotent.
+- `osm dashboard` opens `http://localhost:8484`; if the stack is not running yet, it warns and still opens the URL.
+
+**Session starter (copy/paste):**
+
+```text
+In this repo, "osm" means the obsidian-semantic-mcp CLI (not OpenStreetMap).
+Please execute shell commands directly when I type them.
+If `osm` is not found, use `uv run osm ...` from the repo root.
+Examples: osm init, osm dashboard.
+```
 
 ## Architecture
 

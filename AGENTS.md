@@ -7,6 +7,7 @@ You are working for the project owner.
 - What: obsidian-semantic-mcp
 - Stack: TBD
 - Status: greenfield
+- Terminology: `osm` means the Obsidian Semantic MCP CLI (`osm init`, `osm dashboard`, etc.), not OpenStreetMap.
 
 ## Cross-Agent Protocol
 - Read `.superharness/contract.yaml` before starting work.

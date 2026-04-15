@@ -4,6 +4,10 @@ Thank you for your interest in contributing! This document covers everything you
 
 ## Development Setup
 
+Terminology: `osm` means the Obsidian Semantic MCP CLI (`osm init`, `osm dashboard`, etc.), not OpenStreetMap.
+
+When using chat-based coding agents (Claude Code, Codex, OpenCode), ask for explicit command execution (for example, `Run osm init`) so the agent executes shell commands instead of treating `osm` as plain text.
+
 ### Prerequisites
 
 - Python 3.11+

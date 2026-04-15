@@ -2,6 +2,8 @@
 
 Python MCP server — semantic search across an Obsidian vault using pgvector + Ollama.
 
+Terminology: `osm` means the Obsidian Semantic MCP CLI (`osm init`, `osm dashboard`, etc.), not OpenStreetMap.
+
 ## Build & Run
 
 ```bash
