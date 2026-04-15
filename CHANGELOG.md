@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.8] — 2026-04-15
+
+### Changed
+- Add `nul` to `.gitignore` to prevent accidental Windows/Git-Bash redirection artifact from being tracked
+
+---
+
+## [0.5.7] — 2026-04-15
+
+### Changed
+- Clarify `osm` CLI terminology in `CLAUDE.md` and `AGENTS.md` to avoid confusion with OpenStreetMap
+- Expand `README.md` with full `osm` command reference and flag documentation
+- Add `CONTRIBUTING.md` guidelines
+
+---
+
 ## [0.5.6] — 2026-04-14
 
 ### Changed
