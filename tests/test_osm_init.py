@@ -143,6 +143,28 @@ class TestReadEnv:
         assert result["URL"] == "http://host/path?a=1"
 
 
+# ── _status_ollama_url ───────────────────────────────────────────────────────
+
+class TestStatusOllamaUrl:
+    def test_defaults_to_localhost(self):
+        assert osm_init._status_ollama_url({}) == "http://localhost:11434"
+
+    def test_maps_full_docker_container_url_to_host_port(self):
+        env = {"OLLAMA_URL": "http://ollama:11434"}
+        assert osm_init._status_ollama_url(env) == "http://localhost:11435"
+
+    def test_maps_docker_host_bridge_url_to_localhost(self):
+        env = {"OLLAMA_URL": "http://host.docker.internal:11434"}
+        assert osm_init._status_ollama_url(env) == "http://localhost:11434"
+
+    def test_prefers_ssh_tunnel_port_when_present(self):
+        env = {
+            "OLLAMA_URL": "http://host.docker.internal:11434",
+            "OSM_SSH_LOCAL_PORT": "11435",
+        }
+        assert osm_init._status_ollama_url(env) == "http://localhost:11435"
+
+
 # ── write_env ─────────────────────────────────────────────────────────────────
 
 class TestWriteEnv:

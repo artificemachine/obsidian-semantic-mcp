@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- `osm status` now probes Ollama embeddings in addition to daemon reachability, so it reports the "daemon is up but inference is broken" failure mode directly
+
+### Changed
+- `docs/RUNBOOK.md` and `README.md` now document the Ollama inference probe and the macOS/Homebrew recovery path: `brew services restart ollama`
+
 ## [0.5.8] — 2026-04-15
 
 ### Changed

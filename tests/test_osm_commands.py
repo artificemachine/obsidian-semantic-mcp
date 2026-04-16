@@ -188,6 +188,32 @@ class TestCheckOllamaAt:
         assert seen[0] == "http://myhost:9999/api/tags"
 
 
+class TestCheckOllamaInferenceAt:
+    def test_success(self, monkeypatch):
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"embedding": [0.1, 0.2]}
+
+        monkeypatch.setattr(osm_init.requests, "post", lambda *a, **kw: Resp())
+        assert osm_init.check_ollama_inference_at("http://localhost:11434") is True
+
+    def test_http_failure_surfaces_reason_and_hint(self, monkeypatch, capsys):
+        class Resp:
+            status_code = 500
+            text = '{"error":"model failed to load"}'
+
+            def json(self):
+                return {"error": "model failed to load"}
+
+        monkeypatch.setattr(osm_init.requests, "post", lambda *a, **kw: Resp())
+        assert osm_init.check_ollama_inference_at("http://localhost:11434") is False
+        out = capsys.readouterr().out
+        assert "model failed to load" in out
+        assert "restart ollama" in out.lower()
+
+
 # ── open_ssh_tunnel ───────────────────────────────────────────────────────────
 
 class TestOpenSshTunnel:
@@ -509,9 +535,19 @@ class TestCmdHelp:
 # ── cmd_status ────────────────────────────────────────────────────────────────
 
 class TestCmdStatus:
-    def _run(self, monkeypatch, docker_stdout="", docker_rc=0, cfg_path=None, cfg_content=None):
+    def _run(
+        self,
+        monkeypatch,
+        docker_stdout="",
+        docker_rc=0,
+        cfg_path=None,
+        cfg_content=None,
+        env=None,
+    ):
         monkeypatch.setattr(osm_init, "run", lambda *a, **kw: _cp(docker_rc, stdout=docker_stdout))
         monkeypatch.setattr(osm_init, "check_ollama_at", lambda *a, **kw: True)
+        monkeypatch.setattr(osm_init, "check_ollama_inference_at", lambda *a, **kw: True)
+        monkeypatch.setattr(osm_init, "_read_env", lambda: env or {})
         monkeypatch.setattr(osm_init, "_claude_cfg_path", lambda: cfg_path)
         if cfg_path is not None and cfg_content is not None:
             cfg_path.write_text(cfg_content)
@@ -554,6 +590,29 @@ class TestCmdStatus:
         self._run(monkeypatch, cfg_path=None)
         osm_init.cmd_status()
         assert "not found" in capsys.readouterr().out
+
+    def test_ollama_status_uses_configured_probe_target(self, monkeypatch):
+        seen = {}
+
+        def fake_reachable(host, port):
+            seen["reachable"] = (host, port)
+            return True
+
+        def fake_inference(url, model):
+            seen["inference"] = (url, model)
+            return True
+
+        self._run(
+            monkeypatch,
+            env={"OLLAMA_URL": "http://host.docker.internal:11434"},
+        )
+        monkeypatch.setattr(osm_init, "check_ollama_at", fake_reachable)
+        monkeypatch.setattr(osm_init, "check_ollama_inference_at", fake_inference)
+
+        osm_init.cmd_status()
+
+        assert seen["reachable"] == ("localhost", 11434)
+        assert seen["inference"] == ("http://localhost:11434", osm_init.EMBED_MODEL)
 
 
 # ── cmd_tunnel ────────────────────────────────────────────────────────────────
