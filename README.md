@@ -224,7 +224,7 @@ Use `osm` to set up, manage, and tear down the stack. The wizard installs all pr
 | `osm init` | Interactive setup wizard |
 | `osm init --mode <1-4> --vault <path>` | Non-interactive setup (agent/script friendly) |
 | `osm init --dry-run` | Preview all actions without making any changes |
-| `osm status` | Check service health (Docker, Ollama, Claude Desktop) |
+| `osm status` | Check service health (Docker, Ollama reachability/inference, Claude Desktop) |
 | `osm dashboard` | Open monitoring dashboard in browser |
 | `osm rebuild` | Rebuild Docker images after a code change |
 | `osm tunnel` | Reconnect SSH tunnel (remote Ollama mode) |
@@ -233,6 +233,8 @@ Use `osm` to set up, manage, and tear down the stack. The wizard installs all pr
 | `osm help` | Full flag reference |
 
 **`osm init` flags:** `--mode`, `--vault`, `--pg-password`, `--persistent` / `--no-persistent`, `--data-dir`, `--ssh-host`, `--ssh-user`, `--ssh-port`, `--ssh-key`, `--vault-remote`
+
+`osm status` probes both Ollama reachability (`/api/tags`) and embeddings (`/api/embeddings`) so it can catch the case where the daemon is up but model execution is broken.
 
 > **Windows launcher:** `osm init` installs `osm.cmd` into `%USERPROFILE%\.local\bin\`. Windows resolves `.cmd` automatically, so you invoke it as `osm` from any terminal. If `osm` is not found, add `%USERPROFILE%\.local\bin` to your `Path` environment variable.
 

@@ -23,11 +23,17 @@ If you already cloned the repo, you can also run `uv run osm init` from the proj
 ## Service Health
 
 ```bash
-osm status              # Overview of all services + Ollama + Claude config
+osm status              # Overview of all services + Ollama reachability/inference + Claude config
 docker compose ps       # Container states
 docker compose logs -f   # Live logs (all services)
 docker compose logs -f mcp-server  # MCP server only
 ```
+
+`osm status` now does two Ollama checks:
+- a reachability probe (`/api/tags`)
+- an inference probe (`/api/embeddings`) against the configured runtime target
+
+This catches the failure mode where the Ollama daemon is up but actual model execution is broken.
 
 ## Common Incidents
 
@@ -106,6 +112,34 @@ osm tunnel
 # Verify tunnel is up
 curl http://localhost:11434/api/tags
 ```
+
+### Ollama reachable but inference failing
+
+**Symptoms:** `osm status` reports Ollama as reachable, then reports embeddings failing. MCP startup may succeed, but indexing/search will fail or stall.
+
+```bash
+# Verify the exact failure from the host
+curl -X POST http://localhost:11434/api/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"nomic-embed-text","prompt":"healthcheck"}'
+
+# Check the Ollama service log on macOS/Homebrew installs
+tail -n 100 /opt/homebrew/var/log/ollama.log
+```
+
+**Common fix on macOS/Homebrew:**
+
+```bash
+brew services restart ollama
+```
+
+Then re-check:
+
+```bash
+osm status
+```
+
+If the daemon restarts cleanly, `osm status` should report both reachability and embeddings responding.
 
 ### Docker not found or not running
 

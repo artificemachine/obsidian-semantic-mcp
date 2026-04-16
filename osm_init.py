@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -481,6 +482,103 @@ def _ollama_running_locally(port=11434):
         return True
     except Exception:
         return False
+
+
+def _normalize_ollama_url(url: str) -> str:
+    url = (url or "").strip()
+    if not url:
+        return "http://localhost:11434"
+    if "://" not in url:
+        url = f"http://{url}"
+    return url.rstrip("/")
+
+
+def _status_ollama_url(env: dict | None = None) -> str:
+    """Return the host-side Ollama URL that `osm status` should probe.
+
+    The runtime `.env` stores the URL from the Docker container's perspective
+    (for example `http://ollama:11434` or `http://host.docker.internal:11434`),
+    which is not always directly reachable from the host CLI. This helper maps
+    those internal URLs back to the host-side probe target.
+    """
+    env = env or {}
+
+    # Remote Ollama over SSH always reconnects on a localhost tunnel.
+    local_port = env.get("OSM_SSH_LOCAL_PORT")
+    if local_port:
+        return f"http://localhost:{local_port}"
+
+    configured = _normalize_ollama_url(env.get("OLLAMA_URL", "http://localhost:11434"))
+    parsed = urllib.parse.urlparse(configured)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 11434
+
+    # Full Docker mode exposes the Ollama container on host port 11435.
+    if host == "ollama":
+        return "http://localhost:11435"
+
+    # Docker + host Ollama stores the container-side bridge hostname in .env.
+    if host in {"host.docker.internal", "172.17.0.1"}:
+        return f"http://localhost:{port}"
+
+    return f"http://{host}:{port}"
+
+
+def _ollama_error_detail(resp) -> str:
+    try:
+        data = resp.json()
+        if isinstance(data, dict) and data.get("error"):
+            return str(data["error"])
+    except Exception:
+        pass
+    return (getattr(resp, "text", "") or f"HTTP {resp.status_code}").strip()
+
+
+def _print_ollama_restart_hint():
+    if platform.system() == "Darwin":
+        info("Try: brew services restart ollama")
+        info("Logs: /opt/homebrew/var/log/ollama.log")
+    else:
+        info("Restart the Ollama daemon and inspect its logs")
+
+
+def check_ollama_inference_at(ollama_url: str, model: str = EMBED_MODEL) -> bool:
+    """Probe the embeddings endpoint so status catches broken model execution."""
+    base = _normalize_ollama_url(ollama_url)
+    try:
+        resp = requests.post(
+            f"{base}/api/embeddings",
+            json={"model": model, "prompt": "healthcheck"},
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        fail(f"Ollama embeddings not reachable at {base}")
+        info(f"Reason: {exc}")
+        return False
+
+    if resp.status_code >= 400:
+        detail = _ollama_error_detail(resp)
+        fail(f"Ollama embeddings failing at {base}")
+        info(f"Reason: {detail}")
+        lower = detail.lower()
+        if "model failed to load" in lower or "runner process has terminated" in lower:
+            _print_ollama_restart_hint()
+        return False
+
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        fail(f"Ollama embeddings returned invalid JSON at {base}")
+        info(f"Reason: {exc}")
+        return False
+
+    if not data.get("embedding"):
+        fail(f"Ollama embeddings returned no vector at {base}")
+        info(f"Model: {model}")
+        return False
+
+    ok(f"Ollama embeddings responding at {base} ({model})")
+    return True
 
 
 # ── SSH tunnel helpers ────────────────────────────────────────────────────────
@@ -1560,7 +1658,13 @@ def cmd_status():
     else:
         info("No Docker services running")
 
-    check_ollama_at("localhost")
+    env = _read_env()
+    ollama_url = _status_ollama_url(env)
+    parsed = urllib.parse.urlparse(ollama_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 11434
+    if check_ollama_at(host, port):
+        check_ollama_inference_at(ollama_url, env.get("EMBEDDING_MODEL", EMBED_MODEL))
 
     cfg_path = _claude_cfg_path()
     if cfg_path and cfg_path.exists():
