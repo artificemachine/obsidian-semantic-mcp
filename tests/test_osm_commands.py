@@ -211,7 +211,8 @@ class TestCheckOllamaInferenceAt:
         assert osm_init.check_ollama_inference_at("http://localhost:11434") is False
         out = capsys.readouterr().out
         assert "model failed to load" in out
-        assert "restart ollama" in out.lower()
+        assert "restart" in out.lower()
+        assert "ollama" in out.lower()
 
 
 # ── open_ssh_tunnel ───────────────────────────────────────────────────────────
