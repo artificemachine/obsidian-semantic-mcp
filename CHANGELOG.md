@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.9] — 2026-04-17
+
 ### Fixed
 - `osm status` now probes Ollama embeddings in addition to daemon reachability, so it reports the "daemon is up but inference is broken" failure mode directly
 
