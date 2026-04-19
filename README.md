@@ -471,6 +471,27 @@ osm init --mode 2 --vault /mnt/obsidian_vault
 
 Docker Desktop shares WSL2 paths cleanly with no volume-driver gymnastics. Starting in v0.5.11, `osm init` also fails fast when `docker compose up` is rejected and points you at this section instead of letting the postgres health check time out 90 seconds later.
 
+### Alternative: native NFS / CIFS named volumes (`--vault-fs`, v0.5.12+)
+
+If WSL2 isn't an option, `osm init` can generate a `docker-compose.override.yml` that backs each vault with a Docker named volume using NFS or CIFS driver_opts. Vault entries use protocol-specific syntax instead of host paths:
+
+```bash
+# NFS (one or more vaults; entries use host:/export/path)
+osm init --mode 3 \
+  --vault 10.0.0.1:/exports/coredev \
+  --vault-fs nfs
+
+# CIFS / SMB
+osm init --mode 3 \
+  --vault //nas.local/share/coredev \
+  --vault-fs cifs \
+  --vault-cifs-user alice --vault-cifs-pass 'secret'
+```
+
+For multi-vault, pass each entry to a comma-joined `OBSIDIAN_VAULTS` env (or repeat `--vault`); each generates its own named volume (`obsidian_vault_<basename>`). `osm remove` drops these volumes on teardown.
+
+Limitations: NFSv4 with no auth, SMB with username/password only. NFS Kerberos and CIFS credential files are not supported in v0.5.12. WSL2 is still the recommended path for most users.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

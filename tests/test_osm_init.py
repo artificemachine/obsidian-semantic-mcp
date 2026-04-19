@@ -465,3 +465,103 @@ class TestComposeUpFailFast:
             "Windows UNC path failure must hint at the WSL2 workaround"
         )
 
+
+# ── --vault-fs flag (nfs/cifs override generation) ───────────────────────────
+
+class TestVaultFsFlag:
+    """--vault-fs <auto|local|nfs|cifs> controls whether
+    docker-compose.override.yml uses bind mounts (default) or named volumes
+    backed by NFS / CIFS driver_opts. Resolves a real-world Windows + NAS
+    install failure where bind-mounts of network drives silently mount empty
+    directories."""
+
+    def setup_method(self):
+        _reset()
+
+    def teardown_method(self):
+        _reset()
+
+    def test_vault_fs_local_keeps_bind_mount_behavior(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(osm_init, "DRY_RUN", False)
+        osm_init._PARAMS["vault_fs"] = "local"
+        osm_init._write_compose_override(["/Users/me/vault_a", "/Users/me/vault_b"])
+        out = (tmp_path / "docker-compose.override.yml").read_text()
+        assert "/Users/me/vault_a:/vault_a" in out, "local mode must use bind mount"
+        assert "driver: local" not in out or "type: nfs" not in out, (
+            "local mode must not emit nfs driver_opts"
+        )
+
+    def test_vault_fs_nfs_emits_named_volume_with_driver_opts(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(osm_init, "DRY_RUN", False)
+        osm_init._PARAMS["vault_fs"] = "nfs"
+        # NFS-style entries: host:/export/path
+        osm_init._write_compose_override([
+            "10.0.0.1:/exports/coredev",
+            "10.0.0.1:/exports/yjjoe",
+        ])
+        out = (tmp_path / "docker-compose.override.yml").read_text()
+        assert "driver: local" in out, "NFS mode must declare a named volume"
+        assert "type: nfs" in out, "NFS mode must set driver type to nfs"
+        assert "addr=10.0.0.1" in out, "NFS host must be in driver_opts"
+        assert "/exports/coredev" in out and "/exports/yjjoe" in out
+        assert "obsidian_vault_coredev" in out and "obsidian_vault_yjjoe" in out, (
+            "named volume per vault basename"
+        )
+
+    def test_vault_fs_cifs_emits_named_volume_with_driver_opts(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(osm_init, "DRY_RUN", False)
+        osm_init._PARAMS["vault_fs"] = "cifs"
+        osm_init._PARAMS["vault_cifs_user"] = "alice"
+        osm_init._PARAMS["vault_cifs_pass"] = "secret"
+        osm_init._write_compose_override(["//nas.local/share/coredev"])
+        out = (tmp_path / "docker-compose.override.yml").read_text()
+        assert "type: cifs" in out
+        assert "username=alice" in out
+        assert "password=secret" in out
+        assert "//nas.local/share/coredev" in out
+
+
+class TestRemoveCleansNamedVolumes:
+    """If the generated override declared NFS / CIFS named volumes, osm remove
+    must drop those volumes — otherwise the network mount lingers as a Docker
+    volume reference after teardown and silently leaks into the next install."""
+
+    def setup_method(self):
+        _reset()
+
+    def teardown_method(self):
+        _reset()
+
+    def test_remove_runs_docker_volume_rm_for_obsidian_volumes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        override = tmp_path / "docker-compose.override.yml"
+        override.write_text(
+            "services:\n"
+            "  mcp-server:\n"
+            "    volumes:\n"
+            "      - obsidian_vault_coredev:/coredev\n"
+            "volumes:\n"
+            "  obsidian_vault_coredev:\n"
+            "    driver: local\n"
+            "    driver_opts:\n"
+            "      type: nfs\n"
+        )
+
+        rm_calls: list[list[str]] = []
+
+        def fake_run(cmd, **kw):
+            if "volume" in cmd and "rm" in cmd:
+                rm_calls.append(cmd)
+            return type("R", (), {"stdout": "", "returncode": 0})()
+
+        monkeypatch.setattr(osm_init, "run", fake_run)
+        osm_init._remove_named_volumes_from_override()
+
+        flat = " ".join(c for cmd in rm_calls for c in cmd)
+        assert "obsidian_vault_coredev" in flat, (
+            "must run docker volume rm on the named volume from the override"
+        )
+

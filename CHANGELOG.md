@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.12] — 2026-04-19
+
+### Added
+- `--vault-fs <auto|local|nfs|cifs>` flag for `osm init`. With `nfs` / `cifs`, the generated `docker-compose.override.yml` backs each vault with a Docker named volume using NFS or CIFS driver_opts instead of a bind mount — the path that finally works for Windows + NAS setups where bind-mounts of network drives silently mount empty directories.
+- `--vault-cifs-user` / `--vault-cifs-pass` flags for SMB credentials.
+- `osm remove` now drops `obsidian_vault_*` named volumes referenced by the generated override, so a teardown after `--vault-fs=nfs|cifs` doesn't leak Docker volume references that re-attach on next install.
+- README "Alternative: native NFS / CIFS named volumes" section documenting the new flag, syntax, and v1 limitations (no Kerberos, no credential files).
+
 ## [0.5.11] — 2026-04-19
 
 ### Fixed
