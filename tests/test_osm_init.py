@@ -399,3 +399,69 @@ class TestCmdRemoveLauncherParity:
         ):
             osm_init.cmd_remove()
         assert not launcher.exists()
+
+
+# ── compose_up fail-fast ──────────────────────────────────────────────────────
+
+class TestComposeUpFailFast:
+    """compose_up must surface docker errors immediately on a non-zero exit
+    instead of letting wait_for_postgres time out 90s later. On Windows, a
+    bind-mount UNC path failure must point the user at the WSL2 workaround."""
+
+    def setup_method(self):
+        _reset()
+
+    def teardown_method(self):
+        _reset()
+
+    def _wire(self, monkeypatch, returncode, output):
+        from io import StringIO
+
+        class FakeProc:
+            def __init__(self):
+                self.stdout = StringIO(output)
+                self.returncode = returncode
+
+            def wait(self):
+                return self.returncode
+
+        monkeypatch.setattr(osm_init.subprocess, "Popen", lambda *a, **k: FakeProc())
+        monkeypatch.setattr(osm_init, "DRY_RUN", False)
+
+        diag = {"ps": False, "logs": False}
+
+        def fake_run(cmd, **kw):
+            if "ps" in cmd:
+                diag["ps"] = True
+                return type("R", (), {"stdout": "mcp-server  Created  Exit 1\n", "returncode": 0})()
+            if "logs" in cmd:
+                diag["logs"] = True
+                return type("R", (), {"stdout": "fake log line\n", "returncode": 0})()
+            return type("R", (), {"stdout": "", "returncode": 0})()
+
+        monkeypatch.setattr(osm_init, "run", fake_run)
+        return diag
+
+    def test_success_skips_diagnostics(self, monkeypatch):
+        diag = self._wire(monkeypatch, returncode=0, output="Started\n")
+        osm_init.compose_up()
+        assert diag["ps"] is False
+        assert diag["logs"] is False
+
+    def test_failure_runs_diagnostics_and_exits(self, monkeypatch):
+        diag = self._wire(monkeypatch, returncode=1, output="Error: invalid mount\n")
+        with pytest.raises(SystemExit):
+            osm_init.compose_up()
+        assert diag["ps"] is True
+        assert diag["logs"] is True
+
+    def test_unc_path_error_surfaces_wsl_hint(self, monkeypatch, capsys):
+        unc_err = "Error response from daemon: \\\\10.0.0.1\\share is not a valid Windows path\n"
+        self._wire(monkeypatch, returncode=1, output=unc_err)
+        with pytest.raises(SystemExit):
+            osm_init.compose_up()
+        out = capsys.readouterr().out
+        assert "WSL2" in out or "wsl2" in out.lower(), (
+            "Windows UNC path failure must hint at the WSL2 workaround"
+        )
+

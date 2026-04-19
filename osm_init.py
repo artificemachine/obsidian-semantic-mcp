@@ -1061,9 +1061,44 @@ def compose_up(services=None, env=None):
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kw
     )
+    captured = []
     for line in proc.stdout:
         print(line, end="", flush=True)
-    proc.wait()
+        captured.append(line)
+    rc = proc.wait()
+    if rc != 0:
+        _diagnose_compose_failure("".join(captured))
+        sys.exit(1)
+
+
+def _diagnose_compose_failure(captured_output: str) -> None:
+    """Surface docker state and per-container logs immediately so the user
+    doesn't have to wait for wait_for_postgres to time out 90s later."""
+    fail("docker compose up failed before any container started.")
+    base = ["docker", "compose", "--project-directory", str(PROJECT_ROOT)]
+
+    ps = run(base + ["ps", "-a"], check=False, capture=True)
+    if ps and (ps.stdout or "").strip():
+        info("Container state:")
+        for line in (ps.stdout or "").splitlines():
+            print(f"    {line}")
+
+    for svc in ("mcp-server", "dashboard", "postgres", "ollama"):
+        logs = run(base + ["logs", "--tail", "20", svc], check=False, capture=True)
+        out = (logs.stdout or "").strip() if logs else ""
+        if out:
+            info(f"Last 20 log lines for {svc}:")
+            for line in out.splitlines():
+                print(f"    {line}")
+
+    if "is not a valid Windows path" in captured_output or "UNC path" in captured_output:
+        warn(
+            "This usually means the vault path resolves to a UNC or a drive "
+            "letter backed by a network filesystem (NFS/SMB) that Docker "
+            "Desktop cannot bind-mount. Mount the share inside WSL2 and "
+            "re-run osm init with the WSL path — see the README "
+            "'Windows + network vault' section."
+        )
 
 
 def wait_for_postgres(timeout=90):

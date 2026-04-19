@@ -19,7 +19,7 @@ import pytest
 import requests
 
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:8484")
-_TIMEOUT = 10  # seconds for live HTTP calls
+_TIMEOUT = 20  # seconds for live HTTP calls — accommodates a cold rglob on a NAS-mounted vault during the first /api/stats request after cache expiry
 _SRC = Path(__file__).parent.parent / "src" / "dashboard.py"
 
 
@@ -210,12 +210,14 @@ class TestDashboardLive:
         assert r.status_code == 404
 
     def test_stats_response_time(self):
-        """Stats must respond within 8s — connect_timeout=5 + headroom.
-        A longer response means a service is stalling (hung TCP connect)."""
+        """Stats must respond within 15s. The vault count cache (30s TTL) keeps
+        warm requests sub-second, but a cold cache miss with a NAS- or sshfs-
+        mounted vault can legitimately take several seconds for the rglob.
+        A longer response means a service is genuinely stalling."""
         t0 = time.monotonic()
         requests.get(f"{DASHBOARD_URL}/api/stats", timeout=_TIMEOUT)
         elapsed = time.monotonic() - t0
-        assert elapsed < 8.0, (
+        assert elapsed < 15.0, (
             f"/api/stats took {elapsed:.1f}s — a service may be stalling. "
             f"Run: osm status"
         )

@@ -453,6 +453,24 @@ OBSIDIAN_VAULT="/path/to/your/vault" \
 uv run python3 tests/test_e2e.py
 ```
 
+## Windows + network vault (NFS / SMB)
+
+If your vault lives on a NAS and is mounted on Windows as a drive letter (`Z:\`), `osm init` will fail to bind-mount it into the container — Docker Desktop on Windows uses WSL2, and WSL2 cannot follow a Windows-side network drive into a container. The UNC form (`\\host\share\...`) is rejected by the daemon outright; the drive-letter form silently mounts an empty directory.
+
+**Recommended fix: mount the share inside WSL2 and point `osm init` at the Linux path.**
+
+```bash
+# inside your WSL2 distro (Ubuntu/Debian)
+sudo apt install nfs-common
+sudo mkdir -p /mnt/obsidian_vault
+sudo mount -t nfs <nas-host>:/<export-path> /mnt/obsidian_vault
+# add to /etc/fstab to persist across reboots
+
+osm init --mode 2 --vault /mnt/obsidian_vault
+```
+
+Docker Desktop shares WSL2 paths cleanly with no volume-driver gymnastics. Starting in v0.5.11, `osm init` also fails fast when `docker compose up` is rejected and points you at this section instead of letting the postgres health check time out 90 seconds later.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

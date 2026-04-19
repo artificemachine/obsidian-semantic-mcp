@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.11] — 2026-04-19
+
+### Fixed
+- `osm init` now surfaces `docker compose ps -a` and per-container logs immediately when `docker compose up` exits non-zero, instead of letting the postgres health check time out 90 s later. On Windows, a UNC / drive-letter bind-mount failure now points the user at the WSL2 workaround.
+
+### Added
+- README "Windows + network vault" section covering the WSL2 mount recipe for NFS / SMB vaults.
+
 ## [0.5.10] — 2026-04-19
 
 ### Fixed
