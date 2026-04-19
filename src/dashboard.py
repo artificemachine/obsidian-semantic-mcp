@@ -59,6 +59,12 @@ _orphan_cache: tuple[int, float] | None = None
 _orphan_cache_lock = threading.Lock()
 _ORPHAN_CACHE_TTL = 300.0  # seconds
 
+# Vault file count cache — rglob across the vault is slow on networked mounts
+# (NAS, sshfs); cache to keep /api/stats fast under the dashboard auto-refresh.
+_vault_count_cache: tuple[tuple, int, float] | None = None  # (key, total, expiry)
+_vault_count_cache_lock = threading.Lock()
+_VAULT_COUNT_CACHE_TTL = 30.0  # seconds
+
 
 def search_notes(
     query: str,
@@ -208,15 +214,32 @@ def _get_db_stats(stats: dict) -> None:
 
 
 def _get_vault_stats(stats: dict) -> None:
+    global _vault_count_cache
     vaults = VAULT_PATHS if VAULT_PATHS else ([VAULT_PATH] if VAULT_PATH else [])
     if not vaults:
         return
+
+    # Key the cache on the vault set + the ignore-paths env so any config
+    # change invalidates immediately (and unit tests that swap vaults between
+    # cases don't see stale counts).
+    cache_key = (tuple(vaults), os.environ.get("OBSIDIAN_IGNORE_PATHS", "<unset>"))
+    now = time.monotonic()
+    with _vault_count_cache_lock:
+        if _vault_count_cache is not None:
+            cached_key, cached_total, expiry = _vault_count_cache
+            if cached_key == cache_key and now < expiry:
+                stats["vault_file_count"] = cached_total
+                stats["unindexed_count"] = max(0, cached_total - stats["indexed_count"])
+                return
+
     total = sum(
         1
         for vp in vaults
         for f in Path(vp).rglob("*.md")
         if not _should_skip_path(f)
     )
+    with _vault_count_cache_lock:
+        _vault_count_cache = (cache_key, total, now + _VAULT_COUNT_CACHE_TTL)
     stats["vault_file_count"] = total
     stats["unindexed_count"] = max(0, total - stats["indexed_count"])
 
@@ -270,6 +293,8 @@ def gather_stats() -> dict:
         # inside the container, so the Start button is hidden for non-local Ollama URLs.
         "can_start_ollama": "localhost" in OLLAMA_URL,
         "reindex_busy": False,
+        "last_rebuild_failed_count": 0,
+        "last_rebuild_failed_sample": [],
         "recent_notes": [],
         "pg_version": "—",
         "pgvector_version": "—",
@@ -294,6 +319,14 @@ def gather_stats() -> dict:
     if acquired:
         _reindex_lock.release()
     stats["reindex_busy"] = not acquired
+
+    try:
+        from server import get_last_rebuild_failures
+        failed = get_last_rebuild_failures()
+        stats["last_rebuild_failed_count"] = len(failed)
+        stats["last_rebuild_failed_sample"] = failed[:5]
+    except Exception:
+        pass
 
     return stats
 

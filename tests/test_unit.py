@@ -938,3 +938,59 @@ class TestDockerComposeOllamaModelPull:
         assert "ollama-pull:" in compose
         assert 'entrypoint: ["ollama", "pull", "nomic-embed-text"]' in compose
         assert "OLLAMA_HOST: http://ollama:11434" in compose
+
+
+# ── index_vault failure tracking + retry ─────────────────────────────────────
+
+class TestIndexVaultFailureTracking:
+    """index_vault must retry transient embed failures once and surface
+    persistent failures via get_last_rebuild_failures(), so a wedged Ollama
+    can no longer silently drop notes from a full rebuild."""
+
+    def test_retries_failed_paths_once_and_succeeds(self, tmp_path, monkeypatch):
+        import server
+
+        note = tmp_path / "notes" / "flaky.md"
+        note.parent.mkdir(parents=True)
+        note.write_text("# Flaky\nbody", encoding="utf-8")
+
+        attempts: dict[str, int] = {}
+
+        def flaky_embed(path, content, hash_, vault):
+            attempts[path] = attempts.get(path, 0) + 1
+            if attempts[path] == 1:
+                raise RuntimeError("simulated ollama timeout")
+
+        monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+        monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
+        monkeypatch.setattr(server, "_embed_and_upsert", flaky_embed)
+
+        server.index_vault(str(tmp_path))
+
+        assert attempts[str(note)] == 2, "first failure must trigger one retry"
+        assert server.get_last_rebuild_failures() == [], (
+            "successful retry must clear the failure list"
+        )
+
+    def test_persistent_failures_recorded(self, tmp_path, monkeypatch):
+        import server
+
+        note = tmp_path / "notes" / "broken.md"
+        note.parent.mkdir(parents=True)
+        note.write_text("# Broken\nbody", encoding="utf-8")
+
+        def always_fail(path, content, hash_, vault):
+            raise RuntimeError("ollama unreachable")
+
+        monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+        monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
+        monkeypatch.setattr(server, "_embed_and_upsert", always_fail)
+
+        server.index_vault(str(tmp_path))
+
+        assert str(note) in server.get_last_rebuild_failures(), (
+            "paths that fail both attempts must be surfaced via "
+            "get_last_rebuild_failures() so /api/stats can warn the operator"
+        )

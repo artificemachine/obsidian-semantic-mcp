@@ -90,6 +90,23 @@ _DEBOUNCE_SECS  = 0.5   # collapse rapid saves from Obsidian autosave
 # visibility issues without relying on the GIL.
 _INDEXING_IN_PROGRESS = threading.Event()
 
+# Paths that failed to index on the most recent index_vault() run, after one
+# retry pass. Surfaced via get_last_rebuild_failures() so /api/stats can warn
+# operators about silent data loss when Ollama wedges mid-rebuild.
+_LAST_REBUILD_FAILED: list[str] = []
+_LAST_REBUILD_FAILED_LOCK = threading.Lock()
+
+
+def get_last_rebuild_failures() -> list[str]:
+    with _LAST_REBUILD_FAILED_LOCK:
+        return list(_LAST_REBUILD_FAILED)
+
+
+def _set_last_rebuild_failures(paths: list[str]) -> None:
+    with _LAST_REBUILD_FAILED_LOCK:
+        _LAST_REBUILD_FAILED.clear()
+        _LAST_REBUILD_FAILED.extend(paths)
+
 logging.basicConfig(
     stream=sys.stderr,
     level=logging.INFO,
@@ -459,6 +476,23 @@ def delete_note(path: str) -> None:
     log.info("Removed: %s", path)
 
 
+def _run_embed_pass(batch: list[tuple[str, str, str]], vault: str) -> list[str]:
+    """Embed + upsert one batch in parallel. Returns paths that failed."""
+    if not batch:
+        return []
+    failed: list[str] = []
+    with ThreadPoolExecutor(max_workers=EMBED_WORKERS) as pool:
+        futures = {pool.submit(_embed_and_upsert, p, c, h, vault): p for p, c, h in batch}
+        for fut in as_completed(futures):
+            p = futures[fut]
+            try:
+                fut.result()
+            except Exception as e:
+                log.warning("Failed to index %s: %s", p, e)
+                failed.append(p)
+    return failed
+
+
 def index_vault(vault: str) -> None:
     """Walk the vault and index every markdown file (parallel, hash-skipping)."""
     root = Path(vault)
@@ -483,20 +517,21 @@ def index_vault(vault: str) -> None:
     skipped = len(file_data) - len(changed)
     log.info("Changed: %d, Skipped (unchanged): %d", len(changed), skipped)
 
-    # Parallel embed + upsert
-    errors = 0
-    with ThreadPoolExecutor(max_workers=EMBED_WORKERS) as pool:
-        futures = {pool.submit(_embed_and_upsert, p, c, h, vault): p for p, c, h in changed}
-        for fut in as_completed(futures):
-            p = futures[fut]
-            try:
-                fut.result()
-            except Exception as e:
-                log.warning("Failed to index %s: %s", p, e)
-                errors += 1
+    # Parallel embed + upsert. Track failed paths so we can retry once —
+    # Ollama tends to wedge under heavy concurrent load, and a single retry
+    # after the first pass usually catches transient timeouts. Without this,
+    # a wedged Ollama silently drops notes from a full rebuild.
+    by_path = {p: (p, c, h) for p, c, h in changed}
+    failed: list[str] = _run_embed_pass(list(by_path.values()), vault)
 
-    if errors:
-        log.warning("Indexing finished with %d errors", errors)
+    if failed:
+        log.warning("First pass had %d failures — retrying once", len(failed))
+        retry_batch = [by_path[p] for p in failed if p in by_path]
+        failed = _run_embed_pass(retry_batch, vault)
+
+    _set_last_rebuild_failures(failed)
+    if failed:
+        log.warning("Indexing finished with %d persistent failures", len(failed))
 
     # Rebuild IVFFlat index now that data exists — an index built on an empty
     # table has no list centroids and returns zero results.

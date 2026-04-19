@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.10] — 2026-04-19
+
+### Fixed
+- `index_vault` now retries failed embeds once and surfaces persistent failures via `get_last_rebuild_failures()`, exposed as `last_rebuild_failed_count` / `last_rebuild_failed_sample` in `/api/stats` — prevents silent data loss when Ollama wedges mid-rebuild
+
 ## [0.5.9] — 2026-04-17
 
 ### Fixed
