@@ -833,6 +833,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=_run, daemon=True).start()
             self._json_response(200, {"ok": True, "message": "started"})
 
+        elif path == "/api/prune":
+            try:
+                from server import prune_orphans
+                n = prune_orphans()
+                self._json_response(200, {"ok": True, "deleted": n})
+            except Exception as e:
+                self._json_response(500, {"ok": False, "message": str(e)})
+
         else:
             self._json_response(404, {"error": "not found"})
 

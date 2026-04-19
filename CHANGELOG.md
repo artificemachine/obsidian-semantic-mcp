@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.13] — 2026-04-20
+
+### Changed
+- `index_vault` now batches embeddings via Ollama's `/api/embed` endpoint (Ollama 0.4+) — `EMBED_BATCH_SIZE` items (default 16) per HTTP call instead of one request per note. Eliminates ~14 of every 15 round-trips during a full rebuild and dramatically reduces the surface area for Ollama timeouts under load.
+- On batch failure (older Ollama, network blip, or empty embedding for an item), each chunk transparently falls back to per-item `embed()` so no notes are silently dropped.
+
+### Added
+- `EMBED_BATCH_SIZE` env var (default 16) to tune the per-call batch size.
+- `prune_orphans()` deletes DB rows whose `path` no longer exists on disk — fixes the slow drift between `indexed_count` and `vault_file_count` that builds up after files are deleted, vault paths change, or `OBSIDIAN_IGNORE_PATHS` is updated. Exposed as `POST /api/prune` on the dashboard.
+
 ## [0.5.12] — 2026-04-19
 
 ### Added

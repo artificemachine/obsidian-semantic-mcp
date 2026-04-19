@@ -222,6 +222,7 @@ class TestIndexNoteConnectionSafety:
 
         monkeypatch.setattr(server, "db_conn", fake_db_conn)
         monkeypatch.setattr(server, "_embed_and_upsert", fake_embed_and_upsert)
+        monkeypatch.setattr(server, "embed_batch", lambda texts: (_ for _ in ()).throw(RuntimeError("force fallback")))
         # Prevent Ollama calls in the broken pre-fix state (current code calls embed
         # directly inside the db_conn block; after the fix it delegates to _embed_and_upsert)
         monkeypatch.setattr(server, "embed", lambda text: [0.1, 0.2])
@@ -306,6 +307,7 @@ class TestIgnorePathOverride:
         monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
         monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
         monkeypatch.setattr(server, "_embed_and_upsert", fake_embed_and_upsert)
+        monkeypatch.setattr(server, "embed_batch", lambda texts: (_ for _ in ()).throw(RuntimeError("force fallback")))
 
         server.index_vault(str(tmp_path))
 
@@ -536,6 +538,7 @@ class TestIndexVaultHashConsistency:
 
         monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {str(note): expected_hash})
         monkeypatch.setattr(server, "_embed_and_upsert", fake_embed_and_upsert)
+        monkeypatch.setattr(server, "embed_batch", lambda texts: (_ for _ in ()).throw(RuntimeError("force fallback")))
         monkeypatch.setattr(server, "_should_skip_path", lambda p: False)
 
         server.index_vault(str(tmp_path))
@@ -562,6 +565,7 @@ class TestIndexVaultHashConsistency:
 
         monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {str(note): stale_hash})
         monkeypatch.setattr(server, "_embed_and_upsert", fake_embed_and_upsert)
+        monkeypatch.setattr(server, "embed_batch", lambda texts: (_ for _ in ()).throw(RuntimeError("force fallback")))
         monkeypatch.setattr(server, "_should_skip_path", lambda p: False)
 
         server.index_vault(str(tmp_path))
@@ -593,6 +597,7 @@ class TestIndexVaultArchiveExclusion:
         monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
         monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
         monkeypatch.setattr(server, "_embed_and_upsert", fake_embed_and_upsert)
+        monkeypatch.setattr(server, "embed_batch", lambda texts: (_ for _ in ()).throw(RuntimeError("force fallback")))
 
         server.index_vault(str(tmp_path))
 
@@ -614,6 +619,7 @@ class TestIndexVaultArchiveExclusion:
         monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
         monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
         monkeypatch.setattr(server, "_embed_and_upsert", fake_embed_and_upsert)
+        monkeypatch.setattr(server, "embed_batch", lambda texts: (_ for _ in ()).throw(RuntimeError("force fallback")))
 
         server.index_vault(str(tmp_path))
 
@@ -965,6 +971,9 @@ class TestIndexVaultFailureTracking:
         monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
         monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
         monkeypatch.setattr(server, "_embed_and_upsert", flaky_embed)
+        # Force the batched path to always fall through to per-item _embed_and_upsert,
+        # so this test exercises retry semantics independently of /api/embed availability.
+        monkeypatch.setattr(server, "embed_batch", lambda texts: (_ for _ in ()).throw(RuntimeError("force fallback")))
 
         server.index_vault(str(tmp_path))
 
@@ -987,6 +996,7 @@ class TestIndexVaultFailureTracking:
         monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
         monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
         monkeypatch.setattr(server, "_embed_and_upsert", always_fail)
+        monkeypatch.setattr(server, "embed_batch", lambda texts: (_ for _ in ()).throw(RuntimeError("force fallback")))
 
         server.index_vault(str(tmp_path))
 
@@ -994,3 +1004,220 @@ class TestIndexVaultFailureTracking:
             "paths that fail both attempts must be surfaced via "
             "get_last_rebuild_failures() so /api/stats can warn the operator"
         )
+
+
+# ── batch embeddings ─────────────────────────────────────────────────────────
+
+class TestEmbedBatch:
+    """embed_batch must use Ollama's /api/embed endpoint with input=[...] so a
+    full rebuild doesn't pay a per-note request round-trip. Falls back to
+    single embed when the batch endpoint is unavailable so older Ollama
+    versions keep working."""
+
+    def test_batch_calls_api_embed_with_input_array(self, monkeypatch):
+        import server
+
+        captured: dict = {}
+
+        class FakeResp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self._payload
+
+        def fake_post(url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return FakeResp({"embeddings": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]})
+
+        monkeypatch.setattr(server.requests, "post", fake_post)
+        vecs = server.embed_batch(["a", "b", "c"])
+
+        assert captured["url"].endswith("/api/embed"), (
+            "batch path must hit /api/embed, not /api/embeddings (singular)"
+        )
+        assert captured["json"]["input"] == ["a", "b", "c"], (
+            "input must be the list, not concatenated"
+        )
+        assert vecs == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+
+    def test_batch_returns_vectors_in_input_order(self, monkeypatch):
+        import server
+
+        class FakeResp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self._payload
+
+        monkeypatch.setattr(
+            server.requests, "post",
+            lambda url, json=None, timeout=None: FakeResp(
+                {"embeddings": [[float(i)] for i in range(len(json["input"]))]}
+            ),
+        )
+        vecs = server.embed_batch(["x", "y", "z"])
+        assert vecs == [[0.0], [1.0], [2.0]], "order must match input"
+
+    def test_index_vault_uses_batch_path(self, tmp_path, monkeypatch):
+        """index_vault should call embed_batch with chunks of files, not embed
+        once per file."""
+        import server
+
+        for i in range(5):
+            p = tmp_path / "notes" / f"n{i}.md"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(f"# Note {i}\nbody", encoding="utf-8")
+
+        batch_calls: list[int] = []
+        single_calls: list[str] = []
+
+        def fake_batch(texts):
+            batch_calls.append(len(texts))
+            return [[0.1, 0.2] for _ in texts]
+
+        def fake_single(text):
+            single_calls.append(text[:10])
+            return [0.1, 0.2]
+
+        # Stub upsert SQL — we only care about call shape
+        upserts: list[str] = []
+
+        def fake_upsert_one(path, content, h, vec, vault):
+            upserts.append(path)
+
+        monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+        monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
+        monkeypatch.setattr(server, "embed_batch", fake_batch)
+        monkeypatch.setattr(server, "embed", fake_single)
+        monkeypatch.setattr(server, "_upsert_note", fake_upsert_one)
+
+        server.index_vault(str(tmp_path))
+
+        total_batched = sum(batch_calls)
+        assert total_batched == 5, (
+            f"all 5 files must go through embed_batch, got {batch_calls=} {single_calls=}"
+        )
+        assert len(upserts) == 5
+
+
+# ── orphan prune ─────────────────────────────────────────────────────────────
+
+class TestPruneOrphans:
+    """prune_orphans() deletes DB rows whose path no longer exists on disk —
+    eliminates the slow drift between indexed_count and vault_file_count
+    that builds up when files are deleted, vault paths change, or
+    OBSIDIAN_IGNORE_PATHS is updated."""
+
+    def test_prune_deletes_only_missing_paths(self, tmp_path, monkeypatch):
+        import server
+
+        live = tmp_path / "live.md"
+        live.write_text("# live", encoding="utf-8")
+        gone = tmp_path / "gone.md"  # never created on disk
+
+        deleted: list[str] = []
+        rows_in_db = [(str(live),), (str(gone),)]
+
+        class FakeCursor:
+            def __init__(self):
+                self._next = None
+                self.executes = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params=None):
+                self.executes.append((sql, params))
+                if "SELECT path" in sql:
+                    self._next = list(rows_in_db)
+                elif "DELETE" in sql:
+                    if params and isinstance(params[0], list):
+                        deleted.extend(params[0])
+
+            def fetchall(self):
+                return self._next or []
+
+        class FakeConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def cursor(self):
+                return FakeCursor()
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def fake_db_conn():
+            yield FakeConn()
+
+        monkeypatch.setattr(server, "db_conn", fake_db_conn)
+
+        n = server.prune_orphans()
+        assert str(gone) in deleted, "missing file must be deleted from DB"
+        assert str(live) not in deleted, "live file must be kept"
+        assert n == 1, f"prune must return count of deleted rows, got {n}"
+
+    def test_prune_no_op_when_all_paths_exist(self, tmp_path, monkeypatch):
+        import server
+
+        a = tmp_path / "a.md"
+        b = tmp_path / "b.md"
+        a.write_text("a", encoding="utf-8")
+        b.write_text("b", encoding="utf-8")
+
+        deleted: list[str] = []
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params=None):
+                if "SELECT path" in sql:
+                    self._rows = [(str(a),), (str(b),)]
+                elif "DELETE" in sql and params and isinstance(params[0], list):
+                    deleted.extend(params[0])
+
+            def fetchall(self):
+                return getattr(self, "_rows", [])
+
+        class FakeConn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def cursor(self):
+                return FakeCursor()
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def fake_db_conn():
+            yield FakeConn()
+
+        monkeypatch.setattr(server, "db_conn", fake_db_conn)
+
+        n = server.prune_orphans()
+        assert deleted == []
+        assert n == 0
+

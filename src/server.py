@@ -75,6 +75,7 @@ OLLAMA_URL   = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL  = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 EMBED_TIMEOUT = int(os.environ.get("EMBED_TIMEOUT", "15"))
 EMBED_WORKERS       = int(os.environ.get("EMBED_WORKERS", "4"))       # parallel embedding threads
+EMBED_BATCH_SIZE    = int(os.environ.get("EMBED_BATCH_SIZE", "16"))   # texts per /api/embed call (Ollama 0.4+)
 RERANK_MODEL        = os.environ.get("RERANK_MODEL", "")               # cross-encoder model; empty = disabled
 RERANK_CANDIDATES   = int(os.environ.get("RERANK_CANDIDATES", "20"))   # candidate pool size before re-ranking
 
@@ -303,6 +304,46 @@ def embed(text: str) -> list[float]:
     raise RuntimeError("embed: exhausted retries without raising — should not reach here")
 
 
+def embed_batch(texts: list[str]) -> list[list[float]]:
+    """Embed multiple texts in a single Ollama /api/embed call (Ollama 0.4+).
+
+    Returns embeddings in the same order as the input list. Truncates each
+    text to MAX_EMBED_CHARS. Raises on transient errors after 3 attempts —
+    the caller is responsible for falling back to per-item embed() if the
+    batch endpoint isn't available (older Ollama) or returns an empty
+    embedding for any item.
+    """
+    if not texts:
+        return []
+    truncated = [t[:MAX_EMBED_CHARS] for t in texts]
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                f"{OLLAMA_URL}/api/embed",
+                json={"model": EMBED_MODEL, "input": truncated},
+                timeout=EMBED_TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            vecs = data.get("embeddings", [])
+            if len(vecs) != len(truncated):
+                raise ValueError(
+                    f"Ollama batch returned {len(vecs)} embeddings for "
+                    f"{len(truncated)} inputs"
+                )
+            return vecs
+        except (requests.RequestException, ValueError) as e:
+            if attempt == 2:
+                raise
+            wait = 2 ** attempt
+            log.warning(
+                "embed_batch attempt %d failed (%d items): %s — retrying in %ds",
+                attempt + 1, len(truncated), e, wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError("embed_batch: exhausted retries — should not reach here")
+
+
 def get_embed_dim() -> int:
     """Return the embedding dimension by probing Ollama. Falls back to 768 on failure."""
     try:
@@ -381,11 +422,11 @@ def _bulk_load_hashes(paths: list[str]) -> dict[str, str]:
             return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def _embed_and_upsert(path: str, content: str, h: str, vault_id: str = "") -> None:
-    """Embed a note and upsert into DB. Used by parallel workers during bulk index."""
+def _upsert_note(path: str, content: str, h: str, vec: list[float], vault_id: str = "") -> None:
+    """Upsert a single note row given a precomputed embedding vector. Retries
+    on serialization deadlocks (40P01)."""
     for attempt in range(3):
         try:
-            vec = embed(content)
             with db_conn() as conn:
                 with conn:
                     with conn.cursor() as cur:
@@ -400,13 +441,62 @@ def _embed_and_upsert(path: str, content: str, h: str, vault_id: str = "") -> No
                                     vault_id    = EXCLUDED.vault_id,
                                     indexed_at  = NOW()
                         """, (path, content, h, _vec_to_str(vec), content, vault_id or None))
-            log.info("Indexed: %s", path)
             return
         except psycopg2.Error as e:
             if e.pgcode == "40P01" and attempt < 2:  # deadlock — retry
                 time.sleep(0.1 * (attempt + 1))
                 continue
             raise
+
+
+def _embed_and_upsert(path: str, content: str, h: str, vault_id: str = "") -> None:
+    """Single-item embed + upsert. Kept for backwards compatibility and as
+    the per-item fallback when batch embedding fails for any reason."""
+    vec = embed(content)
+    _upsert_note(path, content, h, vec, vault_id)
+    log.info("Indexed: %s", path)
+
+
+def _embed_and_upsert_batch(items: list[tuple[str, str, str]], vault_id: str = "") -> list[str]:
+    """Embed a chunk of (path, content, hash) tuples in one Ollama call and
+    upsert each. On batch failure (e.g. Ollama doesn't support /api/embed),
+    falls back to single-item embed for the whole chunk so we never lose
+    notes silently. Returns the list of paths that failed even with the
+    single fallback — handed up to the caller for the v0.5.10 retry pass."""
+    if not items:
+        return []
+    failed: list[str] = []
+    try:
+        vecs = embed_batch([content for _, content, _ in items])
+    except Exception as e:
+        log.warning(
+            "Batch embed failed for %d items (%s) — falling back to single embed",
+            len(items), e,
+        )
+        for path, content, h in items:
+            try:
+                _embed_and_upsert(path, content, h, vault_id)
+            except Exception as inner:
+                log.warning("Failed to index %s: %s", path, inner)
+                failed.append(path)
+        return failed
+
+    for (path, content, h), vec in zip(items, vecs):
+        if not vec:
+            log.warning("Empty embedding from batch for %s — falling back to single embed", path)
+            try:
+                _embed_and_upsert(path, content, h, vault_id)
+            except Exception as e:
+                log.warning("Failed to index %s: %s", path, e)
+                failed.append(path)
+            continue
+        try:
+            _upsert_note(path, content, h, vec, vault_id)
+            log.info("Indexed: %s", path)
+        except Exception as e:
+            log.warning("Failed to index %s: %s", path, e)
+            failed.append(path)
+    return failed
 
 
 def _ignored_path_segments() -> set[str]:
@@ -477,20 +567,40 @@ def delete_note(path: str) -> None:
 
 
 def _run_embed_pass(batch: list[tuple[str, str, str]], vault: str) -> list[str]:
-    """Embed + upsert one batch in parallel. Returns paths that failed."""
+    """Embed + upsert by chunking into EMBED_BATCH_SIZE-sized batches and
+    submitting each batch to a worker pool. Each batch is one /api/embed
+    call — saves one HTTP round-trip per note. Returns paths that failed
+    even after the single-embed fallback inside _embed_and_upsert_batch."""
     if not batch:
         return []
+    chunks = [batch[i:i + EMBED_BATCH_SIZE] for i in range(0, len(batch), EMBED_BATCH_SIZE)]
     failed: list[str] = []
-    with ThreadPoolExecutor(max_workers=EMBED_WORKERS) as pool:
-        futures = {pool.submit(_embed_and_upsert, p, c, h, vault): p for p, c, h in batch}
+    with ThreadPoolExecutor(max_workers=min(EMBED_WORKERS, len(chunks))) as pool:
+        futures = [pool.submit(_embed_and_upsert_batch, chunk, vault) for chunk in chunks]
         for fut in as_completed(futures):
-            p = futures[fut]
             try:
-                fut.result()
+                failed.extend(fut.result())
             except Exception as e:
-                log.warning("Failed to index %s: %s", p, e)
-                failed.append(p)
+                log.warning("Batch worker crashed: %s", e)
     return failed
+
+
+def prune_orphans() -> int:
+    """Delete DB rows whose `path` no longer exists on disk. Returns the
+    number of rows deleted. Resyncs `indexed_count` with `vault_file_count`
+    after files are deleted, the vault path changes, or OBSIDIAN_IGNORE_PATHS
+    is updated — the slow drift the watcher can't catch."""
+    with db_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT path FROM notes")
+                paths = [row[0] for row in cur.fetchall()]
+                missing = [p for p in paths if not Path(p).exists()]
+                if not missing:
+                    return 0
+                cur.execute("DELETE FROM notes WHERE path = ANY(%s)", (missing,))
+    log.info("Pruned %d orphan rows from DB", len(missing))
+    return len(missing)
 
 
 def index_vault(vault: str) -> None:
