@@ -827,6 +827,55 @@ class TestCmdRebuild:
         assert "dashboard" in calls[0]
 
 
+# ── cmd_update ────────────────────────────────────────────────────────────────
+
+class TestCmdUpdate:
+    def _capture(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(osm_init, "compose", lambda args, **kw: calls.append(args))
+        monkeypatch.setattr(osm_init, "_fetch_latest_release_tag", lambda: None)
+        return calls
+
+    def test_pulls_image_based_services_explicitly(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        osm_init.cmd_update()
+        pull = next((c for c in calls if c and c[0] == "pull"), None)
+        assert pull is not None
+        assert "postgres" in pull
+        assert "ollama" in pull
+        # Must not try to pull build-only services — that would fail on older
+        # compose versions that error on services without an `image:` field.
+        assert "mcp-server" not in pull
+        assert "dashboard" not in pull
+
+    def test_rebuilds_custom_services_with_pull(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        osm_init.cmd_update()
+        build = next((c for c in calls if c and c[0] == "build"), None)
+        assert build is not None
+        assert "--pull" in build
+        assert "mcp-server" in build
+        assert "dashboard" in build
+
+    def test_restarts_only_custom_services(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        osm_init.cmd_update()
+        up = next((c for c in calls if c and c[0] == "up"), None)
+        assert up is not None
+        assert "-d" in up
+        assert "mcp-server" in up
+        assert "dashboard" in up
+        # Must not restart postgres/ollama — unnecessary downtime.
+        assert "postgres" not in up
+        assert "ollama" not in up
+
+    def test_call_order_pull_then_build_then_up(self, monkeypatch):
+        calls = self._capture(monkeypatch)
+        osm_init.cmd_update()
+        verbs = [c[0] for c in calls if c]
+        assert verbs.index("pull") < verbs.index("build") < verbs.index("up")
+
+
 # ── cmd_remove ────────────────────────────────────────────────────────────────
 
 class TestCmdRemove:

@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-04-20
+
+### Fixed
+- `osm update` was a silent no-op for the default install. The command previously ran only `docker compose pull mcp-server dashboard`, but those two services use `build: .` in `docker-compose.yml` — `pull` does nothing for build-based services, so no local code was ever refreshed. Fixed by running `compose pull postgres ollama` (refreshes image-based services) followed by `compose build --pull mcp-server dashboard` (pulls the latest base image and rebuilds the two custom services from the current source tree), then `compose up -d mcp-server dashboard`. Covers both the default source-build install and a hypothetical image-based install without branching logic.
+
 ## [0.7.0] — 2026-04-20
 
 ### Added

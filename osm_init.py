@@ -2023,8 +2023,19 @@ def cmd_update():
     else:
         warn("Could not reach GitHub to check for latest release")
 
-    info("Pulling latest Docker images…")
-    compose(["pull", "mcp-server", "dashboard"])
+    # The default compose config builds mcp-server and dashboard from local
+    # source (build: .) — `compose pull` is a no-op on those services. To
+    # update all services regardless of whether they use `image:` or `build:`:
+    #   1. `pull` refreshes image-based services (postgres, ollama).
+    #   2. `build --pull` refreshes the base image of build-based services
+    #      and rebuilds them against the current source tree.
+    # Docker compose silently skips each step for services it does not apply
+    # to, so a single invocation covers both install shapes.
+    info("Pulling latest images for image-based services (postgres, ollama)…")
+    compose(["pull", "postgres", "ollama"])
+
+    info("Rebuilding custom services from source with refreshed base images…")
+    compose(["build", "--pull", "mcp-server", "dashboard"])
 
     info("Restarting services…")
     compose(["up", "-d", "mcp-server", "dashboard"])
