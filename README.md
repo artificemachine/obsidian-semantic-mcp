@@ -111,30 +111,30 @@ It then:
 - Installs prerequisites or verifies they already exist (Docker is installed and started automatically if missing)
 - Pulls `nomic-embed-text` if needed
 - Writes a `.env` file (gitignored) with your vault path and credentials
-- Updates `claude_desktop_config.json` automatically
+- Updates MCP client config automatically for **Claude Desktop**, **Claude Code CLI**, and **OpenCode** (whichever are installed)
+- Detects the actual `mcp-server` container name via `docker compose ps` so the entry works even when `COMPOSE_PROJECT_NAME` is set or the repo was cloned into a renamed directory
 
-### 2. Add to Claude Code
+### 2. Restart your MCP client(s)
 
-```bash
-claude mcp add obsidian-semantic -- docker exec -i obsidian-semantic-mcp-mcp-server-1 python3 src/server.py
-```
+Restart Claude Desktop / OpenCode to pick up the new server. For Claude Code CLI, the entry is registered live; verify with `claude mcp list`.
 
-### 3. Add to Claude Desktop
+> **Manual config (only if `osm init` could not detect your client)**
+>
+> Add the same block to `~/.opencode.json`, `claude_desktop_config.json`, or whatever JSON config your MCP client uses:
+> ```json
+> {
+>   "mcpServers": {
+>     "obsidian-semantic": {
+>       "command": "docker",
+>       "args": ["exec", "-i", "obsidian-semantic-mcp-mcp-server-1", "python3", "src/server.py"],
+>       "env": {}
+>     }
+>   }
+> }
+> ```
+> Replace `obsidian-semantic-mcp-mcp-server-1` with the actual container name shown by `docker ps --format "{{.Names}}" | grep mcp-server` if it differs.
 
-Add to `$HOME/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "obsidian-semantic": {
-      "command": "docker",
-      "args": ["exec", "-i", "obsidian-semantic-mcp-mcp-server-1", "python3", "src/server.py"]
-    }
-  }
-}
-```
-
-### 4. Restart Claude Desktop
+### 3. First-run indexing
 
 The server indexes your vault on first run, then watches for changes automatically.
 

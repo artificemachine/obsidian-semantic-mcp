@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-04-20
+
+### Added
+- **OpenCode support.** `osm init` now writes the obsidian-semantic MCP entry into `~/.opencode.json` (cross-platform) alongside Claude Desktop and the Claude Code CLI. `osm status` reports OpenCode registration; `osm remove` cleans it up. New helper `register_with_clients()` fans out to every supported MCP client in one call, so adding a fourth (Continue / Cursor / Codex CLI) is a one-line change.
+
+### Changed
+- `_docker_entry()` now resolves the actual `mcp-server` container name via `docker compose ps` instead of guessing `<dir>-mcp-server-1`. The generated MCP client entries stay correct when users set `COMPOSE_PROJECT_NAME`, run `docker compose -p custom`, or cloned the repo into a renamed directory. Falls back to the previous behavior if docker is unreachable.
+
 ## [0.6.0] — 2026-04-20
 
 ### Added

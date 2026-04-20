@@ -965,12 +965,111 @@ def update_claude_config(entry):
     info("Restart Claude Desktop to pick up the new server")
 
 
+# ── OpenCode config ───────────────────────────────────────────────────────────
+
+
+def _opencode_cfg_path() -> Path:
+    """OpenCode reads MCP servers from ~/.opencode.json on every platform."""
+    return Path.home() / ".opencode.json"
+
+
+def update_opencode_config(entry):
+    """Merge the obsidian-semantic entry into ~/.opencode.json.
+
+    Mirrors update_claude_config: idempotent, preserves other entries, warns on
+    parse errors, and returns silently if OpenCode has never been run on this
+    machine (no config file present and no parent directory required).
+    """
+    path = _opencode_cfg_path()
+    cfg = {}
+    if path.exists():
+        try:
+            cfg = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            warn(f"Could not parse {path} — mcpServers section will be reset")
+    if cfg.get("mcpServers", {}).get("obsidian-semantic"):
+        ok("OpenCode: obsidian-semantic already configured — global, shared across all projects")
+        return
+    cfg.setdefault("mcpServers", {})["obsidian-semantic"] = entry
+    pretty = json.dumps(cfg, indent=2)
+    if DRY_RUN:
+        _dry(f"write {path}", "merged config shown below")
+        print()
+        for line in pretty.splitlines():
+            print(f"    {_c('90', line)}")
+        print()
+        return
+    path.write_text(pretty + "\n")
+    ok(f"Updated {path}")
+    info("Restart OpenCode to pick up the new server")
+
+
+def remove_opencode_config():
+    """Delete the obsidian-semantic entry from ~/.opencode.json if present."""
+    path = _opencode_cfg_path()
+    if not path.exists():
+        info("OpenCode config not found — skipping")
+        return
+    if DRY_RUN:
+        _dry(f"remove obsidian-semantic entry from {path}")
+        return
+    try:
+        cfg = json.loads(path.read_text())
+        servers = cfg.get("mcpServers", {})
+        if "obsidian-semantic" in servers:
+            del servers["obsidian-semantic"]
+            path.write_text(json.dumps(cfg, indent=2) + "\n")
+            ok(f"Removed obsidian-semantic from {path}")
+            info("Restart OpenCode to apply")
+        else:
+            info("obsidian-semantic not found in OpenCode config — skipping")
+    except json.JSONDecodeError:
+        warn(f"Could not parse {path} — remove entry manually")
+
+
+# ── Cross-client registration fan-out ─────────────────────────────────────────
+
+
+def register_with_clients(entry):
+    """Register the MCP entry with every supported client in one shot.
+
+    Today: Claude Desktop, Claude Code CLI, OpenCode. Adding a new client
+    (Continue, Cursor, Codex CLI, ...) is a one-line change here.
+    """
+    update_claude_config(entry)
+    register_claude_cli(entry)
+    update_opencode_config(entry)
+
+
+# ── Container name resolution ─────────────────────────────────────────────────
+
+
+def _resolve_mcp_container_name() -> str:
+    """Return the actual mcp-server container name reported by docker compose.
+
+    Falls back to `<project-dir>-mcp-server-1` (the compose default) when
+    docker is unreachable or compose hasn't started yet. The dynamic lookup
+    handles users who set COMPOSE_PROJECT_NAME, run `docker compose -p custom`,
+    or cloned the repo into a renamed directory.
+    """
+    fallback = f"{PROJECT_ROOT.name}-mcp-server-1"
+    try:
+        r = run(
+            ["docker", "compose", "--project-directory", str(PROJECT_ROOT),
+             "ps", "--format", "{{.Name}}", "mcp-server"],
+            check=False, capture=True,
+        )
+        name = (r.stdout or "").strip().splitlines()[0].strip() if r.stdout else ""
+        return name or fallback
+    except Exception:
+        return fallback
+
+
 def _docker_entry():
-    """Claude Desktop config entry for all Docker-based installs."""
-    container = f"{PROJECT_ROOT.name}-mcp-server-1"
+    """MCP client config entry for all Docker-based installs."""
     return {
         "command": "docker",
-        "args": ["exec", "-i", container, "python3", "src/server.py"],
+        "args": ["exec", "-i", _resolve_mcp_container_name(), "python3", "src/server.py"],
         "env": {},
     }
 
@@ -1326,10 +1425,9 @@ def mode_native_macos():
     ok("Dependencies installed in .venv")
 
     # ── Claude Desktop + CLI config ───────────────────────────────────────────
-    header("Claude Desktop configuration")
+    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode)")
     entry = _native_entry(vault, db_url)
-    update_claude_config(entry)
-    register_claude_cli(entry)
+    register_with_clients(entry)
 
     _done_native(vault)
 
@@ -1374,10 +1472,9 @@ def mode_full_docker():
     # Pull the embedding model so indexing works on first run.
     _ensure_ollama_model("http://localhost:11435")
 
-    header("Claude Desktop configuration")
+    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode)")
     entry = _docker_entry()
-    update_claude_config(entry)
-    register_claude_cli(entry)
+    register_with_clients(entry)
     _done_docker()
 
 
@@ -1426,10 +1523,9 @@ def mode_docker_host_ollama():
     compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
     wait_for_postgres()
 
-    header("Claude Desktop configuration")
+    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode)")
     entry = _docker_entry()
-    update_claude_config(entry)
-    register_claude_cli(entry)
+    register_with_clients(entry)
     _done_docker()
 
 
@@ -1580,10 +1676,9 @@ def mode_docker_remote_ollama():
     compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
     wait_for_postgres()
 
-    header("Claude Desktop configuration")
+    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode)")
     entry = _docker_entry()
-    update_claude_config(entry)
-    register_claude_cli(entry)
+    register_with_clients(entry)
     _done_docker_remote(ssh_user, remote_host, remote_port, local_tunnel_port, key_path)
 
 
@@ -1845,6 +1940,19 @@ def cmd_status():
     else:
         warn("Claude Desktop config not found")
 
+    opencode_cfg = _opencode_cfg_path()
+    if opencode_cfg.exists():
+        try:
+            cfg = json.loads(opencode_cfg.read_text())
+            if "obsidian-semantic" in cfg.get("mcpServers", {}):
+                ok("OpenCode: obsidian-semantic configured")
+            else:
+                info("OpenCode: obsidian-semantic NOT configured — run osm init")
+        except json.JSONDecodeError:
+            warn("OpenCode config could not be parsed")
+    else:
+        info("OpenCode config not found — skipping (OpenCode not installed?)")
+
 
 # ── Rebuild command ───────────────────────────────────────────────────────────
 
@@ -2038,6 +2146,10 @@ def cmd_remove():
                 info("obsidian-semantic not found in Claude Code CLI — skipping")
     else:
         info("claude CLI not found — skipping")
+
+    # ── OpenCode config ───────────────────────────────────────────────────────
+    header("Updating OpenCode config")
+    remove_opencode_config()
 
     # ── osm launcher ──────────────────────────────────────────────────────────
     header("Removing osm launcher")

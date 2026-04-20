@@ -304,10 +304,21 @@ class TestEntries:
         assert "python3" in args
         assert "src/server.py" in args
 
-    def test_docker_entry_container_contains_project_name(self):
-        # args[2] is the container name in: docker exec -i <container> python3 src/server.py
+    def test_docker_entry_container_contains_project_name(self, monkeypatch):
+        # Force the fallback path so the test does not depend on a live docker daemon.
+        monkeypatch.setattr(
+            osm_init, "_resolve_mcp_container_name",
+            lambda: f"{osm_init.PROJECT_ROOT.name}-mcp-server-1",
+        )
         container = osm_init._docker_entry()["args"][2]
         assert osm_init.PROJECT_ROOT.name in container
+
+    def test_docker_entry_uses_resolved_container_name(self, monkeypatch):
+        monkeypatch.setattr(
+            osm_init, "_resolve_mcp_container_name",
+            lambda: "custom-project-mcp-server-1",
+        )
+        assert osm_init._docker_entry()["args"][2] == "custom-project-mcp-server-1"
 
     def test_native_entry_command_is_venv_python(self):
         entry = osm_init._native_entry("/vault", "postgresql://localhost/db")
@@ -369,6 +380,123 @@ class TestUpdateClaudeConfig:
         monkeypatch.setattr(osm_init, "_claude_cfg_path", lambda: cfg)
         osm_init.update_claude_config({"command": "docker"})
         assert osm_init._DRY_ACTIONS
+
+
+# ── _opencode_cfg_path ────────────────────────────────────────────────────────
+
+class TestOpencodeCfgPath:
+    def test_returns_home_dot_opencode_json(self):
+        from pathlib import Path
+        assert osm_init._opencode_cfg_path() == Path.home() / ".opencode.json"
+
+
+# ── update_opencode_config ────────────────────────────────────────────────────
+
+class TestUpdateOpencodeConfig:
+    def test_writes_new_file(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "opencode.json"
+        monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
+        entry = {"command": "docker", "args": ["exec"], "env": {}}
+        osm_init.update_opencode_config(entry)
+        assert json.loads(cfg.read_text())["mcpServers"]["obsidian-semantic"] == entry
+
+    def test_merges_existing_servers(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "opencode.json"
+        cfg.write_text(json.dumps({"mcpServers": {"other": {"command": "foo"}}}))
+        monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
+        osm_init.update_opencode_config({"command": "docker"})
+        data = json.loads(cfg.read_text())
+        assert "other" in data["mcpServers"]
+        assert "obsidian-semantic" in data["mcpServers"]
+
+    def test_idempotent_when_already_present(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "opencode.json"
+        existing = {"command": "docker", "args": ["exec"], "env": {}}
+        cfg.write_text(json.dumps({"mcpServers": {"obsidian-semantic": existing}}))
+        monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
+        # Calling with a different entry should NOT overwrite when already present.
+        osm_init.update_opencode_config({"command": "different"})
+        data = json.loads(cfg.read_text())
+        assert data["mcpServers"]["obsidian-semantic"] == existing
+
+    def test_invalid_json_resets_and_writes(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "opencode.json"
+        cfg.write_text("not json {")
+        monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
+        entry = {"command": "docker"}
+        osm_init.update_opencode_config(entry)
+        assert json.loads(cfg.read_text())["mcpServers"]["obsidian-semantic"] == entry
+
+    def test_dry_run_does_not_write(self, tmp_path, monkeypatch):
+        osm_init.DRY_RUN = True
+        cfg = tmp_path / "opencode.json"
+        monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
+        osm_init.update_opencode_config({"command": "docker"})
+        assert not cfg.exists()
+
+
+# ── remove_opencode_config ────────────────────────────────────────────────────
+
+class TestRemoveOpencodeConfig:
+    def test_removes_only_obsidian_semantic(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "opencode.json"
+        cfg.write_text(json.dumps({"mcpServers": {
+            "obsidian-semantic": {"command": "docker"},
+            "other": {"command": "foo"},
+        }}))
+        monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
+        osm_init.remove_opencode_config()
+        data = json.loads(cfg.read_text())
+        assert "obsidian-semantic" not in data["mcpServers"]
+        assert "other" in data["mcpServers"]
+
+    def test_no_op_when_file_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: tmp_path / "nope.json")
+        osm_init.remove_opencode_config()  # must not raise
+
+    def test_no_op_when_entry_missing(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "opencode.json"
+        cfg.write_text(json.dumps({"mcpServers": {"other": {"command": "foo"}}}))
+        monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
+        osm_init.remove_opencode_config()
+        data = json.loads(cfg.read_text())
+        assert "other" in data["mcpServers"]
+
+
+# ── _resolve_mcp_container_name ───────────────────────────────────────────────
+
+class TestResolveMcpContainerName:
+    def test_uses_docker_output_when_available(self, monkeypatch):
+        class _R:
+            stdout = "actual-container-name-mcp-server-1\n"
+        monkeypatch.setattr(osm_init, "run", lambda *a, **kw: _R())
+        assert osm_init._resolve_mcp_container_name() == "actual-container-name-mcp-server-1"
+
+    def test_falls_back_when_docker_returns_empty(self, monkeypatch):
+        class _R:
+            stdout = ""
+        monkeypatch.setattr(osm_init, "run", lambda *a, **kw: _R())
+        expected = f"{osm_init.PROJECT_ROOT.name}-mcp-server-1"
+        assert osm_init._resolve_mcp_container_name() == expected
+
+    def test_falls_back_when_docker_raises(self, monkeypatch):
+        def boom(*a, **kw):
+            raise OSError("docker not found")
+        monkeypatch.setattr(osm_init, "run", boom)
+        expected = f"{osm_init.PROJECT_ROOT.name}-mcp-server-1"
+        assert osm_init._resolve_mcp_container_name() == expected
+
+
+# ── register_with_clients ─────────────────────────────────────────────────────
+
+class TestRegisterWithClients:
+    def test_calls_all_three_clients(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(osm_init, "update_claude_config", lambda e: called.append("desktop"))
+        monkeypatch.setattr(osm_init, "register_claude_cli", lambda e: called.append("cli"))
+        monkeypatch.setattr(osm_init, "update_opencode_config", lambda e: called.append("opencode"))
+        osm_init.register_with_clients({"command": "docker"})
+        assert called == ["desktop", "cli", "opencode"]
 
 
 # ── prompt_vault ──────────────────────────────────────────────────────────────
