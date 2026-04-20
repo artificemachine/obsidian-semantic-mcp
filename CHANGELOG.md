@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-04-20
+
+### Added
+- `osm version` — print installed CLI version and check the latest GitHub release tag, with a one-line hint when a newer release is available.
+- `osm update` — pull the latest `mcp-server` and `dashboard` Docker images and restart only those services (matches `osm rebuild`'s scope so non-full-docker installs aren't disturbed). Reports CLI drift and prints the reinstall one-liner when the CLI itself is behind.
+
+### Changed
+- Consolidated the `celstnblacc/obsidian-semantic-mcp` repo identifier into a single `_GITHUB_REPO` constant; `_INSTALL_URL` and the generated launcher scripts now derive from it.
+
 ## [0.5.13] — 2026-04-20
 
 ### Changed
