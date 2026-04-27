@@ -18,6 +18,7 @@ import json
 import os
 import platform
 from importlib.metadata import PackageNotFoundError, version
+import tomllib
 import requests
 import shutil
 import subprocess
@@ -34,10 +35,21 @@ if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8
 if sys.stderr.encoding and sys.stderr.encoding.lower().replace("-", "") != "utf8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+def _version_from_pyproject() -> str | None:
+    pyproject = Path(__file__).resolve().parent / "pyproject.toml"
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        project = data.get("project", {})
+        v = project.get("version")
+        return str(v) if v else None
+    except Exception:
+        return None
+
+
 try:
     APP_VERSION = version("obsidian-semantic-mcp")
 except PackageNotFoundError:
-    APP_VERSION = "0.5.6"
+    APP_VERSION = _version_from_pyproject() or "0.0.0"
 
 
 # ── Terminal output ───────────────────────────────────────────────────────────

@@ -80,6 +80,8 @@ elif [ -r /dev/tty ]; then
     # Reattach stdin to the user's terminal when the installer was piped in.
     exec "$INSTALL_DIR/scripts/osm" init "$@" < /dev/tty
 else
-    fail "No interactive terminal available for the setup wizard"
-    exit 1
+    warn "No interactive terminal available for the setup wizard"
+    info "Run setup manually:"
+    printf '\n    %s init\n\n' "$BIN_DIR/osm"
+    exit 0
 fi
