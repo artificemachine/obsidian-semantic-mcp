@@ -162,7 +162,9 @@ osm status | grep "Claude Desktop"
 cat ~/Library/Application\ Support/Claude/claude_desktop_config.json | python3 -m json.tool
 
 # Re-register
-claude mcp add obsidian-semantic -- docker exec -i obsidian-semantic-mcp-mcp-server-1 python3 src/server.py
+claude mcp add --scope user obsidian-semantic -- \
+  docker compose --project-directory /absolute/path/to/obsidian-semantic-mcp \
+  exec -T mcp-server python3 /app/src/server.py
 
 # Restart Claude Desktop after config changes
 ```

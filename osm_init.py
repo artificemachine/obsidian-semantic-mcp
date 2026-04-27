@@ -1044,32 +1044,20 @@ def register_with_clients(entry):
 # ── Container name resolution ─────────────────────────────────────────────────
 
 
-def _resolve_mcp_container_name() -> str:
-    """Return the actual mcp-server container name reported by docker compose.
-
-    Falls back to `<project-dir>-mcp-server-1` (the compose default) when
-    docker is unreachable or compose hasn't started yet. The dynamic lookup
-    handles users who set COMPOSE_PROJECT_NAME, run `docker compose -p custom`,
-    or cloned the repo into a renamed directory.
-    """
-    fallback = f"{PROJECT_ROOT.name}-mcp-server-1"
-    try:
-        r = run(
-            ["docker", "compose", "--project-directory", str(PROJECT_ROOT),
-             "ps", "--format", "{{.Name}}", "mcp-server"],
-            check=False, capture=True,
-        )
-        name = (r.stdout or "").strip().splitlines()[0].strip() if r.stdout else ""
-        return name or fallback
-    except Exception:
-        return fallback
-
-
 def _docker_entry():
     """MCP client config entry for all Docker-based installs."""
     return {
         "command": "docker",
-        "args": ["exec", "-i", _resolve_mcp_container_name(), "python3", "src/server.py"],
+        "args": [
+            "compose",
+            "--project-directory",
+            str(PROJECT_ROOT),
+            "exec",
+            "-T",
+            "mcp-server",
+            "python3",
+            "/app/src/server.py",
+        ],
         "env": {},
     }
 

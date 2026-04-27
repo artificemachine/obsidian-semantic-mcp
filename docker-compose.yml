@@ -92,7 +92,7 @@ services:
     volumes:
       - ${OBSIDIAN_VAULT:-.}:/vault
       # - /path/to/vault2:/vault2  # add for multi-vault
-    # stdio transport — Claude Desktop connects via `docker exec`
+    # stdio transport — MCP clients use `docker compose exec -T mcp-server ...`
     stdin_open: true
     healthcheck:
       test: ["CMD", "python3", "-c", "import sys; sys.exit(0)"]

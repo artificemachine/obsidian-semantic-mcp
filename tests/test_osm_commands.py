@@ -298,27 +298,13 @@ class TestEntries:
     def test_docker_entry_command(self):
         assert osm_init._docker_entry()["command"] == "docker"
 
-    def test_docker_entry_exec_and_server(self):
+    def test_docker_entry_uses_compose_exec_and_server(self):
         args = osm_init._docker_entry()["args"]
-        assert "exec" in args
+        assert args[:4] == ["compose", "--project-directory", str(osm_init.PROJECT_ROOT), "exec"]
+        assert "-T" in args
+        assert "mcp-server" in args
         assert "python3" in args
-        assert "src/server.py" in args
-
-    def test_docker_entry_container_contains_project_name(self, monkeypatch):
-        # Force the fallback path so the test does not depend on a live docker daemon.
-        monkeypatch.setattr(
-            osm_init, "_resolve_mcp_container_name",
-            lambda: f"{osm_init.PROJECT_ROOT.name}-mcp-server-1",
-        )
-        container = osm_init._docker_entry()["args"][2]
-        assert osm_init.PROJECT_ROOT.name in container
-
-    def test_docker_entry_uses_resolved_container_name(self, monkeypatch):
-        monkeypatch.setattr(
-            osm_init, "_resolve_mcp_container_name",
-            lambda: "custom-project-mcp-server-1",
-        )
-        assert osm_init._docker_entry()["args"][2] == "custom-project-mcp-server-1"
+        assert "/app/src/server.py" in args
 
     def test_native_entry_command_is_venv_python(self):
         entry = osm_init._native_entry("/vault", "postgresql://localhost/db")
@@ -461,30 +447,6 @@ class TestRemoveOpencodeConfig:
         osm_init.remove_opencode_config()
         data = json.loads(cfg.read_text())
         assert "other" in data["mcpServers"]
-
-
-# ── _resolve_mcp_container_name ───────────────────────────────────────────────
-
-class TestResolveMcpContainerName:
-    def test_uses_docker_output_when_available(self, monkeypatch):
-        class _R:
-            stdout = "actual-container-name-mcp-server-1\n"
-        monkeypatch.setattr(osm_init, "run", lambda *a, **kw: _R())
-        assert osm_init._resolve_mcp_container_name() == "actual-container-name-mcp-server-1"
-
-    def test_falls_back_when_docker_returns_empty(self, monkeypatch):
-        class _R:
-            stdout = ""
-        monkeypatch.setattr(osm_init, "run", lambda *a, **kw: _R())
-        expected = f"{osm_init.PROJECT_ROOT.name}-mcp-server-1"
-        assert osm_init._resolve_mcp_container_name() == expected
-
-    def test_falls_back_when_docker_raises(self, monkeypatch):
-        def boom(*a, **kw):
-            raise OSError("docker not found")
-        monkeypatch.setattr(osm_init, "run", boom)
-        expected = f"{osm_init.PROJECT_ROOT.name}-mcp-server-1"
-        assert osm_init._resolve_mcp_container_name() == expected
 
 
 # ── register_with_clients ─────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-editable
 
 # Put the venv on PATH so `python3 src/server.py` works directly
-# (needed when Claude Desktop uses `docker exec ... python3 src/server.py`)
+# (needed when MCP clients use `docker compose exec -T mcp-server ...`)
 ENV PATH="/app/.venv/bin:$PATH"
 
 COPY src/ src/

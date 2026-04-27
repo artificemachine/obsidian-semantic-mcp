@@ -112,7 +112,7 @@ It then:
 - Pulls `nomic-embed-text` if needed
 - Writes a `.env` file (gitignored) with your vault path and credentials
 - Updates MCP client config automatically for **Claude Desktop**, **Claude Code CLI**, and **OpenCode** (whichever are installed)
-- Detects the actual `mcp-server` container name via `docker compose ps` so the entry works even when `COMPOSE_PROJECT_NAME` is set or the repo was cloned into a renamed directory
+- Uses `docker compose exec -T mcp-server ...` in generated MCP entries, so users don't need container-name-specific config
 
 ### 2. Restart your MCP client(s)
 
@@ -126,13 +126,13 @@ Restart Claude Desktop / OpenCode to pick up the new server. For Claude Code CLI
 >   "mcpServers": {
 >     "obsidian-semantic": {
 >       "command": "docker",
->       "args": ["exec", "-i", "obsidian-semantic-mcp-mcp-server-1", "python3", "src/server.py"],
+>       "args": ["compose", "--project-directory", "/absolute/path/to/obsidian-semantic-mcp", "exec", "-T", "mcp-server", "python3", "/app/src/server.py"],
 >       "env": {}
 >     }
 >   }
 > }
 > ```
-> Replace `obsidian-semantic-mcp-mcp-server-1` with the actual container name shown by `docker ps --format "{{.Names}}" | grep mcp-server` if it differs.
+> Replace `/absolute/path/to/obsidian-semantic-mcp` with your local clone path.
 
 ### 3. First-run indexing
 
@@ -159,7 +159,7 @@ First run pulls all images and the `nomic-embed-text` model automatically. This 
 |---------|------|-------------|
 | PostgreSQL + pgvector | 5433 | Vector storage (avoids conflict with host pg) |
 | Ollama | 11435 | Local embeddings (auto-pulls model) |
-| MCP server | stdio | Claude Desktop connects via `docker exec` |
+| MCP server | stdio | Claude Desktop connects via `docker compose exec -T mcp-server` |
 | Dashboard | 8484 | http://localhost:8484 |
 
 ### Useful commands
