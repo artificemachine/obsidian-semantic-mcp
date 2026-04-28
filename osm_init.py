@@ -981,16 +981,18 @@ def update_claude_config(entry):
 
 
 def _opencode_cfg_path() -> Path:
-    """OpenCode reads MCP servers from ~/.opencode.json on every platform."""
-    return Path.home() / ".opencode.json"
+    """OpenCode reads MCP servers from ~/.config/opencode/opencode.json on every platform."""
+    return Path.home() / ".config" / "opencode" / "opencode.json"
 
 
 def update_opencode_config(entry):
-    """Merge the obsidian-semantic entry into ~/.opencode.json.
+    """Merge the obsidian-semantic entry into ~/.config/opencode/opencode.json.
 
-    Mirrors update_claude_config: idempotent, preserves other entries, warns on
-    parse errors, and returns silently if OpenCode has never been run on this
-    machine (no config file present and no parent directory required).
+    Converts the standard MCP config entry {command, args, env} into OpenCode's
+    native format: command as a flat array, ``type: "local"``, ``enabled: true``.
+
+    Idempotent — preserves other entries, warns on parse errors, and returns
+    silently if OpenCode has never been run on this machine (no config file).
     """
     path = _opencode_cfg_path()
     cfg = {}
@@ -998,11 +1000,17 @@ def update_opencode_config(entry):
         try:
             cfg = json.loads(path.read_text())
         except json.JSONDecodeError:
-            warn(f"Could not parse {path} — mcpServers section will be reset")
-    if cfg.get("mcpServers", {}).get("obsidian-semantic"):
+            warn(f"Could not parse {path} — mcp section will be reset")
+    # Convert standard {command, args, env} to OpenCode's native format
+    opencode_entry = {
+        "command": [entry["command"]] + entry["args"],
+        "enabled": True,
+        "type": "local",
+    }
+    if cfg.setdefault("mcp", {}).get("obsidian-semantic"):
         ok("OpenCode: obsidian-semantic already configured — global, shared across all projects")
         return
-    cfg.setdefault("mcpServers", {})["obsidian-semantic"] = entry
+    cfg.setdefault("mcp", {})["obsidian-semantic"] = opencode_entry
     pretty = json.dumps(cfg, indent=2)
     if DRY_RUN:
         _dry(f"write {path}", "merged config shown below")
@@ -1011,13 +1019,14 @@ def update_opencode_config(entry):
             print(f"    {_c('90', line)}")
         print()
         return
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(pretty + "\n")
     ok(f"Updated {path}")
     info("Restart OpenCode to pick up the new server")
 
 
 def remove_opencode_config():
-    """Delete the obsidian-semantic entry from ~/.opencode.json if present."""
+    """Delete the obsidian-semantic entry from ~/.config/opencode/opencode.json if present."""
     path = _opencode_cfg_path()
     if not path.exists():
         info("OpenCode config not found — skipping")
@@ -1027,7 +1036,7 @@ def remove_opencode_config():
         return
     try:
         cfg = json.loads(path.read_text())
-        servers = cfg.get("mcpServers", {})
+        servers = cfg.get("mcp", {})
         if "obsidian-semantic" in servers:
             del servers["obsidian-semantic"]
             path.write_text(json.dumps(cfg, indent=2) + "\n")
@@ -1944,7 +1953,7 @@ def cmd_status():
     if opencode_cfg.exists():
         try:
             cfg = json.loads(opencode_cfg.read_text())
-            if "obsidian-semantic" in cfg.get("mcpServers", {}):
+            if "obsidian-semantic" in cfg.get("mcp", {}):
                 ok("OpenCode: obsidian-semantic configured")
             else:
                 info("OpenCode: obsidian-semantic NOT configured — run osm init")
