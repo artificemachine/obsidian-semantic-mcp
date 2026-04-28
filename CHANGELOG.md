@@ -5,7 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.8.0] — 2026-04-28
+
+### Added
+- **PollingObserver fallback for network filesystem vaults.** The native watchdog `Observer` relies on OS-level filesystem events (`inotify` on Linux, `ReadDirectoryChangesW` on Windows) that don't fire for writes made by remote clients on NFS/SMB network mounts, so new/changed notes were silently missed. Added a `PollingObserver` fallback controlled by `VAULT_WATCH_POLLING` (auto/true/false, default: auto) and `VAULT_POLL_INTERVAL` (seconds, default: 10). Auto-detection uses UNC path detection, `GetDriveTypeW` → `net use` → `wmic` on Windows, and `/proc/mounts` fstype check on Linux. Contributed by @yjjoeathome-byte in #14.
 
 ### Fixed
 - `osm init` wrote the OpenCode MCP config entry to `~/.opencode.json` (standard MCP format), but OpenCode v1.14+ reads from `~/.config/opencode/opencode.json` using its own native format (`mcp` key, `command` as a flat array, `type: "local"`, `enabled: true`). Fixed `_opencode_cfg_path()` to target the correct path, `update_opencode_config()` to convert the standard entry to OpenCode's native format, and `remove_opencode_config()` / `osm status` to read from the `mcp` key instead of `mcpServers`. OpenCode now correctly sees `obsidian-semantic` as connected.
