@@ -371,9 +371,9 @@ class TestUpdateClaudeConfig:
 # ── _opencode_cfg_path ────────────────────────────────────────────────────────
 
 class TestOpencodeCfgPath:
-    def test_returns_home_dot_opencode_json(self):
+    def test_returns_config_opencode_opencode_json(self):
         from pathlib import Path
-        assert osm_init._opencode_cfg_path() == Path.home() / ".opencode.json"
+        assert osm_init._opencode_cfg_path() == Path.home() / ".config" / "opencode" / "opencode.json"
 
 
 # ── update_opencode_config ────────────────────────────────────────────────────
@@ -384,41 +384,50 @@ class TestUpdateOpencodeConfig:
         monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
         entry = {"command": "docker", "args": ["exec"], "env": {}}
         osm_init.update_opencode_config(entry)
-        assert json.loads(cfg.read_text())["mcpServers"]["obsidian-semantic"] == entry
+        written = json.loads(cfg.read_text())["mcp"]["obsidian-semantic"]
+        assert written["command"] == ["docker", "exec"]
+        assert written["enabled"] is True
+        assert written["type"] == "local"
 
     def test_merges_existing_servers(self, tmp_path, monkeypatch):
         cfg = tmp_path / "opencode.json"
-        cfg.write_text(json.dumps({"mcpServers": {"other": {"command": "foo"}}}))
+        cfg.write_text(json.dumps({"mcp": {"other": {"command": ["foo"], "enabled": True, "type": "local"}}}))
         monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
-        osm_init.update_opencode_config({"command": "docker"})
+        osm_init.update_opencode_config({"command": "docker", "args": [], "env": {}})
         data = json.loads(cfg.read_text())
-        assert "other" in data["mcpServers"]
-        assert "obsidian-semantic" in data["mcpServers"]
+        assert "other" in data["mcp"]
+        assert "obsidian-semantic" in data["mcp"]
 
     def test_idempotent_when_already_present(self, tmp_path, monkeypatch):
         cfg = tmp_path / "opencode.json"
-        existing = {"command": "docker", "args": ["exec"], "env": {}}
-        cfg.write_text(json.dumps({"mcpServers": {"obsidian-semantic": existing}}))
+        existing = {"command": ["docker", "exec"], "enabled": True, "type": "local"}
+        cfg.write_text(json.dumps({"mcp": {"obsidian-semantic": existing}}))
         monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
         # Calling with a different entry should NOT overwrite when already present.
-        osm_init.update_opencode_config({"command": "different"})
+        osm_init.update_opencode_config({"command": "different", "args": [], "env": {}})
         data = json.loads(cfg.read_text())
-        assert data["mcpServers"]["obsidian-semantic"] == existing
+        assert data["mcp"]["obsidian-semantic"] == existing
 
     def test_invalid_json_resets_and_writes(self, tmp_path, monkeypatch):
         cfg = tmp_path / "opencode.json"
         cfg.write_text("not json {")
         monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
-        entry = {"command": "docker"}
+        entry = {"command": "docker", "args": [], "env": {}}
         osm_init.update_opencode_config(entry)
-        assert json.loads(cfg.read_text())["mcpServers"]["obsidian-semantic"] == entry
+        written = json.loads(cfg.read_text())["mcp"]["obsidian-semantic"]
+        assert written["command"] == ["docker"]
+        assert written["enabled"] is True
+        assert written["type"] == "local"
 
     def test_dry_run_does_not_write(self, tmp_path, monkeypatch):
         osm_init.DRY_RUN = True
-        cfg = tmp_path / "opencode.json"
-        monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
-        osm_init.update_opencode_config({"command": "docker"})
-        assert not cfg.exists()
+        try:
+            cfg = tmp_path / "opencode.json"
+            monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
+            osm_init.update_opencode_config({"command": "docker", "args": [], "env": {}})
+            assert not cfg.exists()
+        finally:
+            osm_init.DRY_RUN = False
 
 
 # ── remove_opencode_config ────────────────────────────────────────────────────
@@ -426,15 +435,15 @@ class TestUpdateOpencodeConfig:
 class TestRemoveOpencodeConfig:
     def test_removes_only_obsidian_semantic(self, tmp_path, monkeypatch):
         cfg = tmp_path / "opencode.json"
-        cfg.write_text(json.dumps({"mcpServers": {
-            "obsidian-semantic": {"command": "docker"},
-            "other": {"command": "foo"},
+        cfg.write_text(json.dumps({"mcp": {
+            "obsidian-semantic": {"command": ["docker"], "enabled": True, "type": "local"},
+            "other": {"command": ["foo"], "enabled": True, "type": "local"},
         }}))
         monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
         osm_init.remove_opencode_config()
         data = json.loads(cfg.read_text())
-        assert "obsidian-semantic" not in data["mcpServers"]
-        assert "other" in data["mcpServers"]
+        assert "obsidian-semantic" not in data["mcp"]
+        assert "other" in data["mcp"]
 
     def test_no_op_when_file_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: tmp_path / "nope.json")
@@ -442,11 +451,11 @@ class TestRemoveOpencodeConfig:
 
     def test_no_op_when_entry_missing(self, tmp_path, monkeypatch):
         cfg = tmp_path / "opencode.json"
-        cfg.write_text(json.dumps({"mcpServers": {"other": {"command": "foo"}}}))
+        cfg.write_text(json.dumps({"mcp": {"other": {"command": ["foo"], "enabled": True, "type": "local"}}}))
         monkeypatch.setattr(osm_init, "_opencode_cfg_path", lambda: cfg)
         osm_init.remove_opencode_config()
         data = json.loads(cfg.read_text())
-        assert "other" in data["mcpServers"]
+        assert "other" in data["mcp"]
 
 
 # ── register_with_clients ─────────────────────────────────────────────────────

@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- `osm init` wrote the OpenCode MCP config entry to `~/.opencode.json` (standard MCP format), but OpenCode v1.14+ reads from `~/.config/opencode/opencode.json` using its own native format (`mcp` key, `command` as a flat array, `type: "local"`, `enabled: true`). Fixed `_opencode_cfg_path()` to target the correct path, `update_opencode_config()` to convert the standard entry to OpenCode's native format, and `remove_opencode_config()` / `osm status` to read from the `mcp` key instead of `mcpServers`. OpenCode now correctly sees `obsidian-semantic` as connected.
+
 ## [0.7.1] — 2026-04-20
 
 ### Fixed
