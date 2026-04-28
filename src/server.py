@@ -51,6 +51,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 
 from config import build_dsn
 
@@ -78,6 +79,13 @@ EMBED_WORKERS       = int(os.environ.get("EMBED_WORKERS", "4"))       # parallel
 EMBED_BATCH_SIZE    = int(os.environ.get("EMBED_BATCH_SIZE", "16"))   # texts per /api/embed call (Ollama 0.4+)
 RERANK_MODEL        = os.environ.get("RERANK_MODEL", "")               # cross-encoder model; empty = disabled
 RERANK_CANDIDATES   = int(os.environ.get("RERANK_CANDIDATES", "20"))   # candidate pool size before re-ranking
+# Polling watcher: "true" forces PollingObserver for all vaults (required for
+# network filesystems like NFS/SMB where OS-level inotify/ReadDirectoryChangesW
+# does not fire for writes from remote clients).  "auto" (default) uses a
+# heuristic — UNC paths and mapped network drives get polling, local paths get
+# native events.  "false" always uses native events.
+VAULT_WATCH_POLLING = os.environ.get("VAULT_WATCH_POLLING", "auto").lower()
+VAULT_POLL_INTERVAL = int(os.environ.get("VAULT_POLL_INTERVAL", "10"))  # seconds between polls
 
 DATABASE_URL = build_dsn()
 
@@ -709,12 +717,91 @@ class VaultEventHandler(FileSystemEventHandler):
             self._schedule(event.dest_path)
 
 
-def start_watcher(vault: str) -> Observer:
-    obs = Observer()
+def _needs_polling(vault: str) -> bool:
+    """Heuristic: return True if the vault path looks like a network filesystem.
+
+    Network mounts (NFS, SMB/CIFS) on Windows appear as UNC paths or mapped
+    drive letters backed by a network redirector.  OS-level filesystem events
+    (ReadDirectoryChangesW on Windows, inotify on Linux) are unreliable or
+    completely absent for writes made by *remote* clients on these mounts.
+    PollingObserver is the only safe choice.
+
+    On Linux, ``/proc/mounts`` is checked for nfs/cifs/smb mount types.
+    On Windows, ``GetDriveType`` via ctypes is checked for DRIVE_REMOTE,
+    with ``net use`` and ``wmic`` fallbacks for NFS client mounts that
+    the standard network redirector does not register.
+    """
+    vp = Path(vault)
+    # UNC paths are always network
+    if str(vp).startswith("\\\\") or str(vp).startswith("//"):
+        return True
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            import subprocess
+            drive_letter = str(vp.resolve()).split(":")[0]
+            drive_root = drive_letter + ":\\"
+            # Check 1: GetDriveTypeW (catches SMB/CIFS mapped drives)
+            DRIVE_REMOTE = 4
+            if ctypes.windll.kernel32.GetDriveTypeW(drive_root) == DRIVE_REMOTE:
+                return True
+            # Check 2: `net use` output (catches NFS and other mounts that
+            # Windows NFS Client registers outside the standard redirector)
+            result = subprocess.run(
+                ["net", "use", drive_letter + ":"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and ("remote" in result.stdout.lower()
+                                            or "\\\\" in result.stdout
+                                            or "nfs" in result.stdout.lower()):
+                return True
+            # Check 3: WMI via wmic (last resort — catches all network drives)
+            result = subprocess.run(
+                ["wmic", "logicaldisk", "where", f"DeviceID='{drive_letter}:'",
+                 "get", "DriveType", "/value"],
+                capture_output=True, text=True, timeout=5,
+            )
+            # DriveType=4 is network drive in WMI
+            if "DriveType=4" in result.stdout:
+                return True
+            return False
+        except Exception:
+            return False
+    else:
+        # Linux: check /proc/mounts for nfs/cifs
+        try:
+            mount_point = str(vp.resolve())
+            with open("/proc/mounts", "r") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 3 and mount_point.startswith(parts[1]):
+                        if parts[2] in ("nfs", "nfs4", "cifs", "smb", "smbfs", "9p", "fuse.sshfs"):
+                            return True
+        except (OSError, IndexError):
+            pass
+        return False
+
+
+def start_watcher(vault: str) -> Observer | PollingObserver:
+    """Start a filesystem watcher for the given vault.
+
+    Uses PollingObserver when VAULT_WATCH_POLLING is "true" or when auto-
+    detection identifies the vault as a network mount.  Falls back to the
+    native Observer otherwise.
+    """
+    use_polling = (
+        VAULT_WATCH_POLLING == "true"
+        or (VAULT_WATCH_POLLING == "auto" and _needs_polling(vault))
+    )
+    if use_polling:
+        obs = PollingObserver(timeout=VAULT_POLL_INTERVAL)
+        log.info("Watching vault (polling, %ds interval): %s", VAULT_POLL_INTERVAL, vault)
+    else:
+        obs = Observer()
+        log.info("Watching vault (native events): %s", vault)
     obs.schedule(VaultEventHandler(vault), vault, recursive=True)
     obs.start()
     _observers.append(obs)
-    log.info("Watching vault: %s", vault)
     return obs
 
 
