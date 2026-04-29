@@ -1221,3 +1221,161 @@ class TestPruneOrphans:
         assert deleted == []
         assert n == 0
 
+
+
+# ── extract_wikilinks ─────────────────────────────────────────────────────────
+
+class TestExtractWikilinks:
+    def test_simple_link(self):
+        import server
+        assert server.extract_wikilinks("See [[Resilience Patterns]] for details.") == ["Resilience Patterns"]
+
+    def test_alias_link(self):
+        import server
+        assert server.extract_wikilinks("[[Resilience Patterns|resilience]]") == ["Resilience Patterns"]
+
+    def test_heading_link(self):
+        import server
+        # [[note#heading]] — the regex strips the heading fragment; only the note name is captured
+        assert server.extract_wikilinks("See [[Resilience Patterns#intro]]") == ["Resilience Patterns"]
+
+    def test_folder_link(self):
+        import server
+        assert server.extract_wikilinks("[[concepts/Resilience Patterns]]") == ["concepts/Resilience Patterns"]
+
+    def test_multiple_links_deduplicated(self):
+        import server
+        content = "[[A]] and [[B]] and [[A]] again"
+        assert server.extract_wikilinks(content) == ["A", "B"]
+
+    def test_no_links(self):
+        import server
+        assert server.extract_wikilinks("Plain text with no links.") == []
+
+    def test_empty_string(self):
+        import server
+        assert server.extract_wikilinks("") == []
+
+
+# ── _build_link_index ─────────────────────────────────────────────────────────
+
+class TestBuildLinkIndex:
+    def test_indexes_md_files(self, tmp_path):
+        import server
+        (tmp_path / "Alpha.md").write_text("# Alpha")
+        (tmp_path / "beta note.md").write_text("# Beta")
+
+        import server as srv
+        import unittest.mock as mock
+        with mock.patch.object(srv, "_should_skip_path", return_value=False):
+            idx = srv._build_link_index(str(tmp_path))
+
+        assert "alpha" in idx
+        assert "beta note" in idx
+
+    def test_skipped_paths_excluded(self, tmp_path, monkeypatch):
+        import server
+        (tmp_path / ".obsidian").mkdir()
+        (tmp_path / ".obsidian" / "hidden.md").write_text("# hidden")
+        (tmp_path / "visible.md").write_text("# visible")
+
+        # _should_skip_path needs _VAULT_LIST to know the vault root
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+        idx = server._build_link_index(str(tmp_path))
+        assert "visible" in idx
+        assert "hidden" not in idx
+
+
+# ── _resolve_links ────────────────────────────────────────────────────────────
+
+class TestResolveLinks:
+    def test_resolves_known_link(self):
+        import server
+        idx = {"resilience patterns": "/vault/notes/Resilience Patterns.md"}
+        result = server._resolve_links(["Resilience Patterns"], idx)
+        assert result["Resilience Patterns"] == "/vault/notes/Resilience Patterns.md"
+
+    def test_unknown_link_is_none(self):
+        import server
+        result = server._resolve_links(["Unknown Note"], {})
+        assert result["Unknown Note"] is None
+
+    def test_folder_style_uses_stem(self):
+        import server
+        idx = {"resilience patterns": "/vault/concepts/Resilience Patterns.md"}
+        result = server._resolve_links(["concepts/Resilience Patterns"], idx)
+        assert result["concepts/Resilience Patterns"] == "/vault/concepts/Resilience Patterns.md"
+
+    def test_case_insensitive(self):
+        import server
+        idx = {"resilience patterns": "/vault/Resilience Patterns.md"}
+        result = server._resolve_links(["resilience patterns"], idx)
+        assert result["resilience patterns"] == "/vault/Resilience Patterns.md"
+
+
+# ── expand_via_links ──────────────────────────────────────────────────────────
+
+class TestExpandViaLinks:
+    def _make_db(self, out_rows=None, in_rows=None):
+        """Return a fake db_conn that returns (out_rows, in_rows) for the two queries."""
+        from contextlib import contextmanager
+
+        out_rows = out_rows or []
+        in_rows = in_rows or []
+        call_count = [0]
+
+        class FakeCursor:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def execute(self, *a): pass
+            def fetchall(self_):
+                idx = call_count[0]
+                call_count[0] += 1
+                return out_rows if idx == 0 else in_rows
+
+        class FakeConn:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def cursor(self): return FakeCursor()
+
+        @contextmanager
+        def fake_db_conn():
+            yield FakeConn()
+
+        return fake_db_conn
+
+    def test_returns_outgoing_neighbors(self, monkeypatch):
+        import server
+        fake = self._make_db(
+            out_rows=[("/vault/B.md", "content B", "/vault/A.md")],
+        )
+        monkeypatch.setattr(server, "db_conn", fake)
+        result = server.expand_via_links(["/vault/A.md"], hops=1)
+        assert len(result) == 1
+        assert result[0][0] == "/vault/B.md"
+
+    def test_returns_incoming_neighbors(self, monkeypatch):
+        import server
+        fake = self._make_db(
+            in_rows=[("/vault/C.md", "content C", "/vault/A.md")],
+        )
+        monkeypatch.setattr(server, "db_conn", fake)
+        result = server.expand_via_links(["/vault/A.md"], hops=1)
+        assert len(result) == 1
+        assert result[0][0] == "/vault/C.md"
+
+    def test_excludes_seed_paths(self, monkeypatch):
+        import server
+        fake = self._make_db(
+            out_rows=[("/vault/A.md", "content A", "/vault/A.md")],
+        )
+        monkeypatch.setattr(server, "db_conn", fake)
+        result = server.expand_via_links(["/vault/A.md"], hops=1)
+        assert result == []
+
+    def test_no_neighbors_returns_empty(self, monkeypatch):
+        import server
+        fake = self._make_db()
+        monkeypatch.setattr(server, "db_conn", fake)
+        result = server.expand_via_links(["/vault/A.md"], hops=1)
+        assert result == []

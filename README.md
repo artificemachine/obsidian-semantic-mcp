@@ -294,7 +294,7 @@ obsidian-semantic-mcp/
 │   ├── osm                # CLI wrapper (macOS/Linux) — `uv run osm init` or `scripts/osm init`
 │   └── osm.ps1            # CLI wrapper (Windows) — `.\scripts\osm.ps1 init`
 ├── src/
-│   ├── server.py          # MCP server — semantic search + vault CRUD (10 tools)
+│   ├── server.py          # MCP server — semantic search + vault CRUD (11 tools)
 │   └── dashboard.py       # Monitoring dashboard (http://localhost:8484)
 ├── tests/
 │   ├── test_unit.py            # Unit tests (no real DB/Ollama needed)
@@ -323,8 +323,9 @@ obsidian-semantic-mcp/
 
 | Tool | Description |
 |------|-------------|
-| `search_vault` | Semantic search by meaning across the entire vault. Returns ranked excerpts with similarity scores. |
+| `search_vault` | Semantic search by meaning across the entire vault. Returns ranked excerpts with similarity scores. Supports `graph_expand: true` to follow wikilinks from top results and surface connected notes that didn't rank semantically. |
 | `simple_search` | Exact text/keyword search across vault files. |
+| `get_note_connections` | Return all notes connected to a given note via wikilinks — both outgoing links and incoming backlinks. Useful for exploring the knowledge graph and finding related notes. |
 
 ### Vault Management
 

@@ -113,3 +113,26 @@ The unit-level detection (mock `Win32_LogicalDisk` / `Get-SmbMapping`) can land 
 ## 6. One-paragraph summary
 
 On Windows, `osm init` used to silently produce a broken install when `--vault` pointed at a drive letter backed by NFS or SMB — the UNC form was rejected by Docker Desktop and the drive-letter form mounted an empty directory because WSL2 cannot follow Windows-side network mounts. As of `v0.5.13`, three things have shipped: a fail-fast diagnostic that surfaces the docker error in seconds instead of after a 90 s postgres timeout, a `--vault-fs` flag that emits a `docker-compose.override.yml` with native NFS / CIFS driver_opts (with proper teardown via `osm remove`), and a `POST /api/prune` endpoint that resolves the indexed-vs-disk drift that often follows a vault path change. The Windows auto-detect path is the only remaining deferred item — gated on having a Windows CI runner.
+
+---
+
+## 7. Update (2026-04-27): installer + version consistency (`v0.7.3`)
+
+This session resolved two packaging/UX issues reported during mixed OrbStack/Docker Desktop usage:
+
+1. **Piped installer hard-failed in non-interactive environments.**  
+   Running `curl .../install.sh | bash` could fail with `/dev/tty: Device not configured` when the script attempted to force interactive `osm init`.
+2. **CLI version appeared stale after update flows.**  
+   `osm version` could show installed `0.7.1` while latest release was newer, even after image/service updates.
+
+### Shipped in `v0.7.3`
+
+- `install.sh` now exits cleanly when no interactive TTY is available and prints a manual next step:
+  - `~/.local/bin/osm init`
+- CLI fallback version logic now reads `pyproject.toml` instead of using a stale hardcoded fallback.
+- Project metadata was bumped and aligned to `0.7.3` (`pyproject.toml` and `uv.lock`).
+
+### Operator notes
+
+- `osm update` updates services/images and now reports `Installed CLI: 0.7.3` / `Latest release: 0.7.3` when current.
+- If install is run from a non-interactive context (CI, piped shell, launcher without tty), setup is no longer treated as a fatal failure. Run `osm init` manually after install.

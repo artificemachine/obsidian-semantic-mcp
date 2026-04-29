@@ -105,6 +105,14 @@ _INDEXING_IN_PROGRESS = threading.Event()
 _LAST_REBUILD_FAILED: list[str] = []
 _LAST_REBUILD_FAILED_LOCK = threading.Lock()
 
+# Wikilink graph: stem.lower() → absolute path for all indexed .md files.
+# Rebuilt by index_vault(); incrementally updated by the file watcher.
+_link_index: dict[str, str] = {}
+_link_index_lock = threading.Lock()
+
+# Matches [[note]], [[note|alias]], [[note#heading]], [[folder/note]]
+_WIKILINK_RE = re.compile(r'\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]')
+
 
 def get_last_rebuild_failures() -> list[str]:
     with _LAST_REBUILD_FAILED_LOCK:
@@ -115,6 +123,40 @@ def _set_last_rebuild_failures(paths: list[str]) -> None:
     with _LAST_REBUILD_FAILED_LOCK:
         _LAST_REBUILD_FAILED.clear()
         _LAST_REBUILD_FAILED.extend(paths)
+
+def extract_wikilinks(content: str) -> list[str]:
+    """Return all wikilink targets found in content (deduplicated, order-preserved)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _WIKILINK_RE.finditer(content):
+        name = m.group(1).strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _build_link_index(vault: str) -> dict[str, str]:
+    """Map stem.lower() → absolute path for every non-skipped .md file in vault."""
+    index: dict[str, str] = {}
+    for f in Path(vault).rglob("*.md"):
+        if not _should_skip_path(f):
+            index[f.stem.lower()] = str(f)
+    return index
+
+
+def _resolve_links(names: list[str], index: dict[str, str]) -> dict[str, str | None]:
+    """Resolve wikilink names to absolute paths using a prebuilt stem index.
+
+    Handles both short names ([[note]]) and path-style names ([[folder/note]])
+    by using only the stem component for lookup.
+    """
+    result: dict[str, str | None] = {}
+    for name in names:
+        stem = Path(name).stem.lower()
+        result[name] = index.get(stem)
+    return result
+
 
 logging.basicConfig(
     stream=sys.stderr,
@@ -242,6 +284,19 @@ def init_db(embed_dim: int = 768) -> None:
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS notes_tsv_idx
                     ON notes USING GIN (content_tsv);
+                """)
+                # Wikilink graph table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS note_links (
+                        source_path TEXT NOT NULL,
+                        target_name TEXT NOT NULL,
+                        target_path TEXT,
+                        PRIMARY KEY (source_path, target_name)
+                    );
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS note_links_target_idx
+                    ON note_links (target_path);
                 """)
                 # Check existing embedding dimension vs current model
                 cur.execute("""
@@ -432,7 +487,12 @@ def _bulk_load_hashes(paths: list[str]) -> dict[str, str]:
 
 def _upsert_note(path: str, content: str, h: str, vec: list[float], vault_id: str = "") -> None:
     """Upsert a single note row given a precomputed embedding vector. Retries
-    on serialization deadlocks (40P01)."""
+    on serialization deadlocks (40P01). Also extracts and stores wikilinks."""
+    links = extract_wikilinks(content)
+    with _link_index_lock:
+        idx_snapshot = dict(_link_index)
+    resolved = _resolve_links(links, idx_snapshot) if links else {}
+
     for attempt in range(3):
         try:
             with db_conn() as conn:
@@ -449,6 +509,16 @@ def _upsert_note(path: str, content: str, h: str, vec: list[float], vault_id: st
                                     vault_id    = EXCLUDED.vault_id,
                                     indexed_at  = NOW()
                         """, (path, content, h, _vec_to_str(vec), content, vault_id or None))
+                        # Replace all wikilinks for this source in the same transaction
+                        cur.execute(
+                            "DELETE FROM note_links WHERE source_path = %s", (path,)
+                        )
+                        if resolved:
+                            cur.executemany(
+                                "INSERT INTO note_links (source_path, target_name, target_path) "
+                                "VALUES (%s, %s, %s)",
+                                [(path, name, tgt) for name, tgt in resolved.items()],
+                            )
             return
         except psycopg2.Error as e:
             if e.pgcode == "40P01" and attempt < 2:  # deadlock — retry
@@ -571,6 +641,10 @@ def delete_note(path: str) -> None:
         with conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM notes WHERE path = %s", (path,))
+                cur.execute("DELETE FROM note_links WHERE source_path = %s", (path,))
+    stem = Path(path).stem.lower()
+    with _link_index_lock:
+        _link_index.pop(stem, None)
     log.info("Removed: %s", path)
 
 
@@ -616,6 +690,12 @@ def index_vault(vault: str) -> None:
     root = Path(vault)
     md_files = [f for f in root.rglob("*.md") if not _should_skip_path(f)]
     log.info("Indexing %d notes in %s…", len(md_files), vault)
+
+    # Build link index before embedding so _upsert_note can resolve wikilinks.
+    new_index = _build_link_index(vault)
+    with _link_index_lock:
+        _link_index.update(new_index)
+    log.info("Link index built: %d entries for %s", len(new_index), vault)
 
     # Read all contents and compute hashes in the main thread (fast, no DB)
     file_data: list[tuple[str, str, str]] = []  # (path_str, content, hash)
@@ -692,6 +772,10 @@ class VaultEventHandler(FileSystemEventHandler):
             self._timers.pop(path, None)
         try:
             content = Path(path).read_text(encoding="utf-8", errors="ignore")
+            # Keep link index current so wikilink resolution stays accurate
+            stem = Path(path).stem.lower()
+            with _link_index_lock:
+                _link_index[stem] = path
             index_note(path, content, self._vault_id)
         except FileNotFoundError:
             delete_note(path)
@@ -732,8 +816,9 @@ def _needs_polling(vault: str) -> bool:
     the standard network redirector does not register.
     """
     vp = Path(vault)
-    # UNC paths are always network
-    if str(vp).startswith("\\\\") or str(vp).startswith("//"):
+    # UNC paths are always network (\\server\share on Windows, //server/share on POSIX)
+    vault_s = str(vp)
+    if vault_s[:2] in ("\\\\", "//"):
         return True
     if sys.platform == "win32":
         try:
@@ -841,6 +926,58 @@ def _shutdown():
     asyncio.get_event_loop().stop()
 
 
+# ─────────────────────────── Wikilink Graph Expansion ───────────────────────
+
+def expand_via_links(paths: list[str], hops: int = 1) -> list[tuple[str, str, str]]:
+    """Return notes reachable within `hops` link-steps from `paths`.
+
+    Traverses both outgoing ([[linked to]]) and incoming (linked from) edges.
+    Returns (path, content, via_path) tuples where via_path is the note that
+    bridged the connection. Excludes nodes already in `paths`.
+    """
+    seen: set[str] = set(paths)
+    frontier: set[str] = set(paths)
+    expansions: list[tuple[str, str, str]] = []
+
+    for _ in range(hops):
+        if not frontier:
+            break
+        frontier_list = list(frontier)
+        seen_list = list(seen)
+        with db_conn() as conn:
+            with conn.cursor() as cur:
+                # Outgoing: notes that the frontier links to
+                cur.execute("""
+                    SELECT nl.target_path, n.content, nl.source_path
+                    FROM note_links nl
+                    JOIN notes n ON n.path = nl.target_path
+                    WHERE nl.source_path = ANY(%s)
+                      AND nl.target_path IS NOT NULL
+                      AND nl.target_path != ALL(%s)
+                """, (frontier_list, seen_list))
+                out_rows = cur.fetchall()
+
+                # Incoming: notes that link back into the frontier
+                cur.execute("""
+                    SELECT nl.source_path, n.content, nl.target_path
+                    FROM note_links nl
+                    JOIN notes n ON n.path = nl.source_path
+                    WHERE nl.target_path = ANY(%s)
+                      AND nl.source_path != ALL(%s)
+                """, (frontier_list, seen_list))
+                in_rows = cur.fetchall()
+
+        new_frontier: set[str] = set()
+        for p, content, via in out_rows + in_rows:
+            if p not in seen:
+                expansions.append((p, content, via))
+                seen.add(p)
+                new_frontier.add(p)
+        frontier = new_frontier
+
+    return expansions
+
+
 # ──────────────────────────── Vault Filesystem Helpers ───────────────────────
 
 def _vault_root() -> Path:
@@ -912,6 +1049,11 @@ async def list_tools():
                     "vault": {
                         "type": "string",
                         "description": "Filter results to a specific vault by its name (basename of vault path). Omit to search all vaults.",
+                    },
+                    "graph_expand": {
+                        "type": "boolean",
+                        "description": "Follow wikilinks from top results to surface connected notes that didn't rank semantically. Useful for discovering missed connections.",
+                        "default": False,
                     },
                 },
                 "required": ["query"],
@@ -1043,6 +1185,29 @@ async def list_tools():
             },
         ),
         Tool(
+            name="get_note_connections",
+            description=(
+                "Return all notes connected to a given note via wikilinks — "
+                "both notes it links to (outgoing) and notes that link back to it (incoming). "
+                "Useful for exploring your knowledge graph and finding related notes."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Vault-relative path to the note (e.g. 'notes/concepts/resilience.md')",
+                    },
+                    "hops": {
+                        "type": "integer",
+                        "description": "How many link-hops to traverse (default: 1, max: 2)",
+                        "default": 1,
+                    },
+                },
+                "required": ["filepath"],
+            },
+        ),
+        Tool(
             name="recent_changes",
             description="Get recently modified files in the vault.",
             inputSchema={
@@ -1076,6 +1241,7 @@ async def call_tool(name: str, arguments: dict):
         min_similarity = float(arguments.get("min_similarity", 0.0))
         mode = arguments.get("mode", "hybrid")
         vault_filter = arguments.get("vault", "").strip()
+        graph_expand = bool(arguments.get("graph_expand", False))
         if mode not in ("hybrid", "semantic", "keyword"):
             mode = "hybrid"
 
@@ -1096,7 +1262,7 @@ async def call_tool(name: str, arguments: dict):
 
         # Check LRU cache before hitting Ollama + DB
         cache_key = hashlib.sha256(
-            f"{query}:{limit}:{min_similarity}:{mode}:{RERANK_MODEL}:{vault_filter}".encode()
+            f"{query}:{limit}:{min_similarity}:{mode}:{RERANK_MODEL}:{vault_filter}:{graph_expand}".encode()
         ).hexdigest()
         cached = _search_cache.get(cache_key)
         if cached is not None:
@@ -1186,6 +1352,24 @@ async def call_tool(name: str, arguments: dict):
                 while "\n\n\n" in preview:
                     preview = preview.replace("\n\n\n", "\n\n")
                 parts.append(f"**{rel}** _(similarity: {sim:.2f})_\n\n{preview}\n")
+
+            if graph_expand and results:
+                result_paths = [r[0] for r in results]
+                neighbors = await loop.run_in_executor(
+                    None, expand_via_links, result_paths, 1
+                )
+                if neighbors:
+                    parts.append("\n**Wikilink neighbors** _(connected notes not in top results)_\n")
+                    for npath, ncontent, via in neighbors:
+                        nrel = _relative(Path(npath))
+                        via_rel = _relative(Path(via))
+                        npreview = ncontent[:300].strip()
+                        while "\n\n\n" in npreview:
+                            npreview = npreview.replace("\n\n\n", "\n\n")
+                        parts.append(
+                            f"**{nrel}** _(linked via {via_rel})_\n\n{npreview}\n"
+                        )
+                    log.info("graph_expand added %d neighbor(s)", len(neighbors))
 
             result = [TextContent(type="text", text="\n---\n".join(parts))]
 
@@ -1381,6 +1565,39 @@ async def call_tool(name: str, arguments: dict):
                 match_text = "\n".join(f"  ...{m}..." for m in matches)
                 parts.append(f"**{rel}**\n{match_text}")
             return [TextContent(type="text", text="\n\n".join(parts))]
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error: {e}")]
+
+    # ── get_note_connections ──────────────────────────────────────────────────
+    elif name == "get_note_connections":
+        try:
+            filepath = arguments.get("filepath", "").strip()
+            hops = max(1, min(int(arguments.get("hops", 1)), 2))
+            if not filepath:
+                return [TextContent(type="text", text="Please provide a filepath.")]
+
+            target = _resolve_vault_path(filepath)
+            abs_path = str(target)
+
+            neighbors = await asyncio.get_running_loop().run_in_executor(
+                None, expand_via_links, [abs_path], hops
+            )
+
+            if not neighbors:
+                return [TextContent(
+                    type="text",
+                    text=f"No linked notes found for {filepath}. "
+                         "The note may have no wikilinks, or linked notes are not yet indexed.",
+                )]
+
+            lines = [f"**{len(neighbors)} connected note(s)** for `{filepath}` (hops={hops})\n"]
+            for npath, ncontent, via in neighbors:
+                nrel = _relative(Path(npath))
+                via_rel = _relative(Path(via))
+                preview = ncontent[:200].strip().split("\n")[0]
+                lines.append(f"- **{nrel}** _(via {via_rel})_ — {preview}")
+
+            return [TextContent(type="text", text="\n".join(lines))]
         except Exception as e:
             return [TextContent(type="text", text=f"Error: {e}")]
 
