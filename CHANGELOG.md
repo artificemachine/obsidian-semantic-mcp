@@ -307,3 +307,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 2026-04-29: Bump version to 0.9.0 (feat: wikilink graph augmentation)
 
 - 2026-04-30: docs: add Example Output section and bootstrap installer warning to README
+
+## [0.9.1] — 2026-04-30
+### Changed
+- docs: added Example Output section to README with ranked search results
+- docs: bootstrap installer warns about uncommitted-changes failure at ~/.local/share/obsidian-semantic-mcp
