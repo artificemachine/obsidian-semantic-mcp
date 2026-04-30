@@ -305,3 +305,5 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Apache 2.0 license
 - 2026-04-29: Add wikilink graph augmentation (Path A) — note_links table, extract_wikilinks, expand_via_links, graph_expand param on search_vault, get_note_connections tool
 - 2026-04-29: Bump version to 0.9.0 (feat: wikilink graph augmentation)
+
+- 2026-04-30: docs: add Example Output section and bootstrap installer warning to README

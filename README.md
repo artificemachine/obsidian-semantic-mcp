@@ -52,6 +52,8 @@ uv run osm dashboard
 curl -fsSL https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.sh | bash
 ```
 
+> If `~/.local/share/obsidian-semantic-mcp` already exists, the installer updates that checkout before continuing. If that install directory has uncommitted local changes, the update step can abort with a Git merge error. In that case either commit/stash those changes there, or use your current checkout directly with `uv run osm init`.
+
 **Windows PowerShell:**
 ```powershell
 powershell -c "irm https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.ps1 | iex"
@@ -112,7 +114,7 @@ It then:
 - Pulls `nomic-embed-text` if needed
 - Writes a `.env` file (gitignored) with your vault path and credentials
 - Updates MCP client config automatically for **Claude Desktop**, **Claude Code CLI**, and **OpenCode** (whichever are installed)
-- Uses `docker compose exec -T mcp-server ...` in generated MCP entries, so users don't need container-name-specific config
+- Uses the repo launcher script in generated MCP entries, so startup does not depend on a raw Docker command or container-name-specific config
 
 ### 2. Restart your MCP client(s)
 
@@ -125,14 +127,14 @@ Restart Claude Desktop / OpenCode to pick up the new server. For Claude Code CLI
 > {
 >   "mcpServers": {
 >     "obsidian-semantic": {
->       "command": "docker",
->       "args": ["compose", "--project-directory", "/absolute/path/to/obsidian-semantic-mcp", "exec", "-T", "mcp-server", "python3", "/app/src/server.py"],
+>       "command": "/absolute/path/to/obsidian-semantic-mcp/scripts/obsidian-semantic-mcp",
+>       "args": [],
 >       "env": {}
 >     }
 >   }
 > }
 > ```
-> Replace `/absolute/path/to/obsidian-semantic-mcp` with your local clone path.
+> Replace `/absolute/path/to/obsidian-semantic-mcp` with your local clone path. The launcher prefers the running Docker stack and falls back to the repo-local `.venv` when Docker is unavailable.
 
 ### 3. First-run indexing
 
@@ -159,7 +161,7 @@ First run pulls all images and the `nomic-embed-text` model automatically. This 
 |---------|------|-------------|
 | PostgreSQL + pgvector | 5433 | Vector storage (avoids conflict with host pg) |
 | Ollama | 11435 | Local embeddings (auto-pulls model) |
-| MCP server | stdio | Claude Desktop connects via `docker compose exec -T mcp-server` |
+| MCP server | stdio | Clients connect via `scripts/obsidian-semantic-mcp`, which prefers Docker and falls back to local `.venv` |
 | Dashboard | 8484 | http://localhost:8484 |
 
 ### Useful commands
@@ -266,6 +268,25 @@ Please execute shell commands directly when I type them.
 If `osm` is not found, use `uv run osm ...` from the repo root.
 Examples: osm init, osm dashboard.
 ```
+
+### Example Output
+
+When Claude searches your vault, results come back ranked with similarity scores and content previews:
+
+```
+## Search: "what did I write about ketosis"
+
+1. health/ketosis-diet.md (similarity: 0.87)
+   Ketosis is a metabolic state where the body burns fat for fuel...
+   
+2. Daily/2026-03-14.md (similarity: 0.72)
+   Started keto today. Meal prepped for the week...
+   
+3. research/low-carb-studies.md (similarity: 0.65)
+   Recent studies on low-carb diets show...
+```
+
+For vault CRUD, `get_file` returns the full note content; `recent_changes` lists recently modified files with timestamps.
 
 ## Architecture
 
@@ -565,16 +586,14 @@ Add to `$HOME/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "obsidian-semantic": {
-      "command": "/absolute/path/to/obsidian-semantic-mcp/.venv/bin/python3",
-      "args": ["/absolute/path/to/obsidian-semantic-mcp/src/server.py"],
-      "env": {
-        "OBSIDIAN_VAULT": "/absolute/path/to/your/vault",
-        "DATABASE_URL": "postgresql://localhost/obsidian_brain"
-      }
+      "command": "/absolute/path/to/obsidian-semantic-mcp/scripts/obsidian-semantic-mcp",
+      "args": [],
+      "env": {}
     }
   }
 }
 ```
+The launcher reads the repo `.env` for local fallback, and uses the running Docker service automatically when it is available.
 
 > **Important:** Use `.venv/bin/python3` — not system Python. Homebrew Python won't have the required packages.
 
