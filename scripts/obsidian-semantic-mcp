@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+DOCKER_BIN="${DOCKER_BIN:-docker}"
+
+if command -v "$DOCKER_BIN" >/dev/null 2>&1; then
+  if "$DOCKER_BIN" compose --project-directory "$PROJECT_ROOT" ps --status running -q mcp-server >/dev/null 2>&1; then
+    container_id="$("$DOCKER_BIN" compose --project-directory "$PROJECT_ROOT" ps --status running -q mcp-server 2>/dev/null || true)"
+    if [[ -n "$container_id" ]]; then
+      exec "$DOCKER_BIN" compose --project-directory "$PROJECT_ROOT" exec -T mcp-server python3 /app/src/server.py "$@"
+    fi
+  fi
+fi
+
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$PROJECT_ROOT/.env"
+  set +a
+fi
+
+if [[ -z "${OBSIDIAN_VAULTS:-}" && -z "${OBSIDIAN_VAULT:-}" ]]; then
+  echo "obsidian-semantic-mcp: missing OBSIDIAN_VAULTS or OBSIDIAN_VAULT" >&2
+  exit 1
+fi
+
+if [[ -z "${DATABASE_URL:-}" && -z "${POSTGRES_PASSWORD:-}" ]]; then
+  echo "obsidian-semantic-mcp: missing DATABASE_URL or POSTGRES_PASSWORD" >&2
+  exit 1
+fi
+
+PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python3"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "obsidian-semantic-mcp: missing local runtime at $PYTHON_BIN" >&2
+  exit 1
+fi
+
+exec "$PYTHON_BIN" "$PROJECT_ROOT/src/server.py" "$@"

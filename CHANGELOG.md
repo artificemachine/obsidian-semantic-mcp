@@ -312,3 +312,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - docs: added Example Output section to README with ranked search results
 - docs: bootstrap installer warns about uncommitted-changes failure at ~/.local/share/obsidian-semantic-mcp
+
+## [0.9.2] — 2026-05-04
+### Fixed
+- `osm init` MCP client entries now route through `scripts/obsidian-semantic-mcp`, a runtime-agnostic wrapper that auto-detects a running `mcp-server` Docker container and falls back to the local `.venv` Python. Replaces the inline `docker compose exec` and `.venv/bin/python3` invocations that broke on container restarts and venv path changes. See `docs/mcp_startup_incident_2026-04-30.md` for context.
+- Pin `.python-version` to `3.11.6` (was `3.14`, which was unintended and unavailable on the install host).

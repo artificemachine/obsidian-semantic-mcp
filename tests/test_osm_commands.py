@@ -295,25 +295,15 @@ class TestClaudeCfgPath:
 # ── _docker_entry / _native_entry ─────────────────────────────────────────────
 
 class TestEntries:
-    def test_docker_entry_command(self):
-        assert osm_init._docker_entry()["command"] == "docker"
+    def test_docker_entry_command_is_wrapper(self):
+        entry = osm_init._docker_entry()
+        assert entry["command"] == str(osm_init.PROJECT_ROOT / "scripts" / "obsidian-semantic-mcp")
+        assert entry["args"] == []
 
-    def test_docker_entry_uses_compose_exec_and_server(self):
-        args = osm_init._docker_entry()["args"]
-        assert args[:4] == ["compose", "--project-directory", str(osm_init.PROJECT_ROOT), "exec"]
-        assert "-T" in args
-        assert "mcp-server" in args
-        assert "python3" in args
-        assert "/app/src/server.py" in args
-
-    def test_native_entry_command_is_venv_python(self):
+    def test_native_entry_command_is_wrapper(self):
         entry = osm_init._native_entry("/vault", "postgresql://localhost/db")
-        assert "python3" in entry["command"]
-        assert ".venv" in entry["command"]
-
-    def test_native_entry_args_has_server(self):
-        entry = osm_init._native_entry("/vault", "postgresql://localhost/db")
-        assert any("server.py" in a for a in entry["args"])
+        assert entry["command"] == str(osm_init.PROJECT_ROOT / "scripts" / "obsidian-semantic-mcp")
+        assert entry["args"] == []
 
     def test_native_entry_env_vars(self):
         entry = osm_init._native_entry("/vault", "postgresql://localhost/db")

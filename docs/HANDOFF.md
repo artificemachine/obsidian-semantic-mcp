@@ -136,3 +136,92 @@ This session resolved two packaging/UX issues reported during mixed OrbStack/Doc
 
 - `osm update` updates services/images and now reports `Installed CLI: 0.7.3` / `Latest release: 0.7.3` when current.
 - If install is run from a non-interactive context (CI, piped shell, launcher without tty), setup is no longer treated as a fatal failure. Run `osm init` manually after install.
+
+---
+
+## 8. Update (2026-04-29): wikilink graph augmentation (`v0.9.0`)
+
+This session added Path A graph augmentation — a retrieval expansion layer built on Obsidian's existing `[[wikilinks]]` that surfaces missed connections between notes that are relationally linked but semantically distant.
+
+### Problem it solves
+
+Semantic search returns notes that are textually similar to the query. It misses notes that share a conceptual link but were written in isolation — different terminology, different context, different session. Over months of vault growth, related notes accumulate without ever being surfaced together in a single search result. The wikilink graph is the user's own curated relation map; traversing it at query time surfaces connections the user already encoded but forgot about.
+
+### What shipped in `v0.9.0`
+
+**New DB table: `note_links`**
+- Schema: `(source_path TEXT, target_name TEXT, target_path TEXT, PRIMARY KEY (source_path, target_name))`
+- Populated in `_upsert_note()` in the same transaction as the embedding upsert — always in sync, never stale
+- Indexed on `target_path` for fast incoming-edge queries
+
+**New helpers in `src/server.py`**
+- `extract_wikilinks(content)` — regex parser for `[[note]]`, `[[note|alias]]`, `[[note#heading]]`, `[[folder/note]]`; deduplicates, order-preserving
+- `_build_link_index(vault)` — maps `stem.lower() → abs_path` for all non-skipped `.md` files; called once per vault at `index_vault()` time
+- `_resolve_links(names, index)` — resolves link names to paths using stem lookup; handles `[[folder/note]]` by using only the stem
+- `expand_via_links(paths, hops)` — traverses both outgoing and incoming edges for 1–2 hops; returns `(path, content, via_path)` tuples excluding seed paths
+
+**New and updated MCP tools**
+- `get_note_connections(filepath, hops=1)` — explore the knowledge graph directly by note path; returns all connected notes with direction and preview
+- `search_vault` gains `graph_expand: bool` (default `false`) — when true, appends 1-hop wikilink neighbors after semantic results
+
+**File watcher integration**
+- `VaultEventHandler._handle_upsert()` updates `_link_index` on every file create/modify
+- `delete_note()` cleans `note_links` rows and removes the stem from `_link_index`
+
+**Also fixed**
+- `_needs_polling()` UNC path check rewrote `str(vp).startswith("\\\\")` as `vault_s[:2] in ("\\\\", "//")` to resolve a shipguard PY-004 false positive that was blocking CI
+
+### Key constraint: hash-skip means no link extraction for unchanged files
+
+`index_vault()` calls `_upsert_note()` only for files whose hash changed. On a fresh deploy with existing indexed notes, all files are hash-skipped and `note_links` stays empty. A one-time backfill is required:
+
+```python
+# Run inside the mcp-server container
+docker compose exec mcp-server python3 - << 'SCRIPT'
+import sys, os
+sys.path.insert(0, '/app/src')
+os.environ.setdefault('OBSIDIAN_VAULT', '/vault')
+from server import db_conn, extract_wikilinks, _build_link_index, _resolve_links, VAULT_PATHS
+
+link_index = {}
+for v in VAULT_PATHS:
+    link_index.update(_build_link_index(v))
+
+with db_conn() as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT path, content FROM notes")
+        notes = cur.fetchall()
+
+with db_conn() as conn:
+    with conn:
+        with conn.cursor() as cur:
+            for path, content in notes:
+                names = extract_wikilinks(content)
+                resolved = _resolve_links(names, link_index) if names else {}
+                cur.execute("DELETE FROM note_links WHERE source_path = %s", (path,))
+                if resolved:
+                    cur.executemany(
+                        "INSERT INTO note_links (source_path, target_name, target_path) VALUES (%s, %s, %s)",
+                        [(path, n, t) for n, t in resolved.items()]
+                    )
+SCRIPT
+```
+
+This was run on the v0.9.0 deploy and produced 2457 link edges across 314 notes (481 resolved targets, 1740 unresolved — links to non-indexed or non-existent notes).
+
+### Stats at deploy
+
+- Vault: 1081 indexed notes, 892 link index entries
+- `note_links`: 2457 edges, 314 source notes, 481 resolved targets
+- Tests: 300 passing (20 new covering `extract_wikilinks`, `_build_link_index`, `_resolve_links`, `expand_via_links`)
+- CI: all checks green after fixing the PY-004 false positive
+
+### Deferred / future work
+
+- Path B (LLM entity extraction) for implicit connections not captured by wikilinks — scoped in `docs/graphrag_path_a_scope.md` and `docs/graphrag_integration.md`
+- The hash-skip / link-extraction gap should be fixed at the indexing layer so a fresh deploy auto-backfills without a manual script
+- Unresolved link rate is high (71%) — worth investigating whether case normalization or broader stem matching would recover more edges
+
+### One-paragraph summary
+
+v0.9.0 adds a wikilink graph layer to retrieval. At index time, every `[[wikilink]]` in a note is extracted, resolved to an absolute path, and stored in `note_links` in the same DB transaction as the embedding. At query time, `search_vault` with `graph_expand: true` runs one hop of outgoing and incoming link traversal on the semantic top-K results and appends connected neighbors that didn't rank on their own. The new `get_note_connections` tool exposes the graph directly without requiring a query. The watcher and `delete_note()` keep both `_link_index` and `note_links` current on every file change, so the graph stays in sync without any background jobs.

@@ -1068,17 +1068,8 @@ def register_with_clients(entry):
 def _docker_entry():
     """MCP client config entry for all Docker-based installs."""
     return {
-        "command": "docker",
-        "args": [
-            "compose",
-            "--project-directory",
-            str(PROJECT_ROOT),
-            "exec",
-            "-T",
-            "mcp-server",
-            "python3",
-            "/app/src/server.py",
-        ],
+        "command": str(PROJECT_ROOT / "scripts" / "obsidian-semantic-mcp"),
+        "args": [],
         "env": {},
     }
 
@@ -1095,8 +1086,8 @@ def _native_entry(vault, db_url):
     else:
         env["OBSIDIAN_VAULT"] = vaults[0]
     return {
-        "command": str(PROJECT_ROOT / ".venv" / "bin" / "python3"),
-        "args": [str(PROJECT_ROOT / "src" / "server.py")],
+        "command": str(PROJECT_ROOT / "scripts" / "obsidian-semantic-mcp"),
+        "args": [],
         "env": env,
     }
 
