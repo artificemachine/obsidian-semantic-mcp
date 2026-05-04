@@ -53,7 +53,24 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
-from config import build_dsn
+from dotenv import load_dotenv
+
+# Load .env from the install data dir first, then fall back to the repo root.
+# This allows the MCP server to start correctly when spawned by an MCP client
+# (e.g. OpenCode, Claude Desktop) without any env vars pre-set in the shell.
+_ENV_SEARCH_PATHS = [
+    Path.home() / ".local" / "share" / "obsidian-semantic-mcp" / ".env",
+    Path(__file__).resolve().parent.parent / ".env",
+]
+for _env_path in _ENV_SEARCH_PATHS:
+    if _env_path.exists():
+        load_dotenv(_env_path, override=False)
+        break
+
+try:
+    from .config import build_dsn  # installed as a package (uv tool / pip install)
+except ImportError:
+    from config import build_dsn  # fallback: run directly from src/ during dev
 
 
 # ─────────────────────────────────── Config ─────────────────────────────────
@@ -1670,6 +1687,11 @@ async def main():
             write_stream,
             server.create_initialization_options(),
         )
+
+
+def run_server():
+    """Sync entry point for the ``obsidian-semantic-mcp`` console script."""
+    asyncio.run(main())
 
 
 if __name__ == "__main__":

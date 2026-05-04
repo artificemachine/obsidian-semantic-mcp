@@ -317,3 +317,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - `osm init` MCP client entries now route through `scripts/obsidian-semantic-mcp`, a runtime-agnostic wrapper that auto-detects a running `mcp-server` Docker container and falls back to the local `.venv` Python. Replaces the inline `docker compose exec` and `.venv/bin/python3` invocations that broke on container restarts and venv path changes. See `docs/mcp_startup_incident_2026-04-30.md` for context.
 - Pin `.python-version` to `3.11.6` (was `3.14`, which was unintended and unavailable on the install host).
+
+## [0.9.3] — 2026-05-04
+### Fixed
+- MCP server auto-loads `.env` on startup (searches `~/.local/share/obsidian-semantic-mcp/.env` then repo root, with `override=False` so shell env wins). Fixes startup when spawned by an MCP client (OpenCode, Claude Desktop) that doesn't inherit shell env vars.
+- Imports inside `src/server.py` and `src/dashboard.py` try relative form first (`from .config import build_dsn`) and fall back to absolute, so the package works both when installed via `uv tool install` and when run directly from `src/` during development.
+
+### Added
+- `obsidian-semantic-mcp` console script entry point (`src.server:run_server`) for global `uv tool install`.

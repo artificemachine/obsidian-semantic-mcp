@@ -22,8 +22,12 @@ from urllib.parse import urlparse, parse_qs
 
 import requests
 
-from config import build_dsn
-from server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS, _should_skip_path
+try:
+    from .config import build_dsn  # installed as a package (uv tool / pip install)
+    from .server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS, _should_skip_path
+except ImportError:
+    from config import build_dsn  # fallback: run directly from src/ during dev
+    from server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS, _should_skip_path
 
 VAULT_PATH  = VAULT_PATHS[0] if VAULT_PATHS else ""
 OLLAMA_URL  = os.environ.get("OLLAMA_URL", "http://localhost:11434")

@@ -5,8 +5,8 @@ You are working for the project owner.
 
 ## This Project
 - What: obsidian-semantic-mcp
-- Stack: TBD
-- Status: greenfield
+- Stack: Python (uv)
+- Status: v0.6.0 — active development
 - Terminology: `osm` means the Obsidian Semantic MCP CLI (`osm init`, `osm dashboard`, etc.), not OpenStreetMap.
 
 ## Cross-Agent Protocol
