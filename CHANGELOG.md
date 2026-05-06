@@ -329,3 +329,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.9.4] — 2026-05-06
 ### Fixed
 - MCP wrapper script now waits up to 30 seconds (configurable via `OSM_DOCKER_WAIT`) for the `mcp-server` Docker container to enter the running state before falling back to the local venv. Eliminates the startup race where Claude Code spawns the wrapper while Docker is still warming up the container, the wrapper sees no running container, falls through to a not-yet-ready local fallback, and the MCP gets marked failed for the entire session. Adds a `docker info` short-circuit so the wait is skipped when the daemon is intentionally off. See `docs/mcp_startup_race_2026-05-06.md` for the full analysis.
+- 2026-05-06: v0.9.5 — Python launcher entry point (path-agnostic, OSM_DOCKER=1 opt-in); docker-compose.yml switches from local build to Docker Hub images (OSM_VERSION pin)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "obsidian-semantic-mcp"
-version = "0.9.4"
+version = "0.9.5"
 description = "Semantic search MCP server for Obsidian vaults"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -41,7 +41,7 @@ dev = [
 
 [project.scripts]
 osm = "osm_init:main"
-obsidian-semantic-mcp = "src.server:run_server"
+obsidian-semantic-mcp = "src.launcher:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
