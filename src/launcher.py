@@ -23,17 +23,34 @@ import subprocess
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+OSM_CONFIG_DIR = Path.home() / ".config" / "obsidian-semantic-mcp"
+PROJECT_ROOT_FILE = OSM_CONFIG_DIR / "project_root"
+
 
 def _docker_bin() -> str:
     return os.environ.get("DOCKER_BIN", "docker")
 
 
-def _project_root() -> Path:
+def _project_root() -> Path | None:
     root = os.environ.get("OSM_PROJECT_ROOT")
     if root:
         return Path(root)
-    # When running from a dev checkout, __file__ is src/launcher.py → parent is src/ → parent is repo root.
-    return Path(__file__).resolve().parent.parent
+
+    # Try global config file (v0.9.6+)
+    if PROJECT_ROOT_FILE.exists():
+        try:
+            return Path(PROJECT_ROOT_FILE.read_text(encoding="utf-8").strip())
+        except Exception:
+            pass
+
+    # Fallback: dev checkout detection (src/launcher.py is in src/)
+    dev_root = Path(__file__).resolve().parent.parent
+    if (dev_root / "docker-compose.yml").exists():
+        return dev_root
+
+    return None
 
 
 def _validate_env() -> None:
@@ -85,20 +102,41 @@ def _run_server() -> None:
 
 
 def main() -> None:
+    docker_mode = os.environ.get("OSM_DOCKER")
+    project_root = _project_root()
+
+    # If we found a project root, load its .env file to hydrate local environment
+    if project_root:
+        env_file = project_root / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
+
+    # Opt-in logic:
+    # 1. OSM_DOCKER="1" always enables it (fails if project_root not found)
+    # 2. If OSM_DOCKER is unset, enable it if project_root was found via config/dev
+    use_docker = False
+    if docker_mode == "1":
+        use_docker = True
+    elif docker_mode != "0" and project_root:
+        use_docker = True
+
+    if use_docker:
+        if not project_root:
+            if docker_mode == "1":
+                print("obsidian-semantic-mcp: OSM_DOCKER=1 but project root not found", file=sys.stderr)
+                sys.exit(1)
+        else:
+            wait = int(os.environ.get("OSM_DOCKER_WAIT", "30"))
+            if wait > 0 and _docker_info_ok():
+                for _ in range(wait):
+                    cid = _container_id(project_root)
+                    if cid:
+                        _exec_into_container(project_root)
+                        return
+                    time.sleep(1)
+
+    # Local fallback or native mode
     _validate_env()
-
-    if os.environ.get("OSM_DOCKER") == "1":
-        wait = int(os.environ.get("OSM_DOCKER_WAIT", "30"))
-        project_root = _project_root()
-
-        if wait > 0 and _docker_info_ok():
-            for _ in range(wait):
-                cid = _container_id(project_root)
-                if cid:
-                    _exec_into_container(project_root)
-                    return  # exec replaces process; this line is never reached
-                time.sleep(1)
-
     _run_server()
 
 

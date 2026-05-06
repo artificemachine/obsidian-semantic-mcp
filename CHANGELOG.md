@@ -330,3 +330,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - MCP wrapper script now waits up to 30 seconds (configurable via `OSM_DOCKER_WAIT`) for the `mcp-server` Docker container to enter the running state before falling back to the local venv. Eliminates the startup race where Claude Code spawns the wrapper while Docker is still warming up the container, the wrapper sees no running container, falls through to a not-yet-ready local fallback, and the MCP gets marked failed for the entire session. Adds a `docker info` short-circuit so the wait is skipped when the daemon is intentionally off. See `docs/mcp_startup_race_2026-05-06.md` for the full analysis.
 - 2026-05-06: v0.9.5 — Python launcher entry point (path-agnostic, OSM_DOCKER=1 opt-in); docker-compose.yml switches from local build to Docker Hub images (OSM_VERSION pin)
+
+## [0.9.6] — 2026-05-06
+### Added
+- Project root discovery via ~/.config/obsidian-semantic-mcp/project_root (written by osm init).
+- Launcher now automatically enables Docker mode if the project root is discovered and OSM_DOCKER is not "0".
+- Launcher now automatically loads .env from the project root.
+### Fixed
+- MCP stdio transport: replaced `mcp.server.stdio.stdio_server` with raw `sys.stdin.buffer` feeding anyio memory streams. Fixes "-32000: Connection closed" when the MCP client reconnects between sessions (anyio.wrap_file EOF bug).
+### Changed
+- MCP client configurations are now zero-config (empty env block, path-agnostic obsidian-semantic-mcp command).

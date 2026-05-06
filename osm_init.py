@@ -869,6 +869,25 @@ def write_env(
     env_path.chmod(0o600)  # contains POSTGRES_PASSWORD — owner-only read/write
     ok(f"Wrote {env_path}")
 
+OSM_CONFIG_DIR = Path.home() / ".config" / "obsidian-semantic-mcp"
+PROJECT_ROOT_FILE = OSM_CONFIG_DIR / "project_root"
+
+
+def _write_project_root_config():
+    """
+    Persist the project root to ~/.config/obsidian-semantic-mcp/project_root
+    so the launcher can find it automatically.
+    """
+    if DRY_RUN:
+        _dry(f"write {PROJECT_ROOT_FILE}", f"contents: {PROJECT_ROOT}")
+        return
+    try:
+        OSM_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        PROJECT_ROOT_FILE.write_text(str(PROJECT_ROOT), encoding="utf-8")
+        ok(f"Registered project root: {PROJECT_ROOT}")
+    except Exception as e:
+        warn(f"Could not write {PROJECT_ROOT_FILE}: {e}")
+
 
 # ── Claude Code CLI registration ──────────────────────────────────────────────
 
@@ -1060,6 +1079,7 @@ def register_with_clients(entry):
     update_claude_config(entry)
     register_claude_cli(entry)
     update_opencode_config(entry)
+    _write_project_root_config()
 
 
 # ── Container name resolution ─────────────────────────────────────────────────
@@ -1068,27 +1088,18 @@ def register_with_clients(entry):
 def _docker_entry():
     """MCP client config entry for all Docker-based installs."""
     return {
-        "command": str(PROJECT_ROOT / "scripts" / "obsidian-semantic-mcp"),
+        "command": "obsidian-semantic-mcp",
         "args": [],
         "env": {},
     }
 
 
 def _native_entry(vault, db_url):
-    """Claude Desktop config entry for native install.
-
-    vault may be a string or list of strings.
-    """
-    vaults = vault if isinstance(vault, list) else [vault]
-    env = {"DATABASE_URL": db_url}
-    if len(vaults) > 1:
-        env["OBSIDIAN_VAULTS"] = ",".join(vaults)
-    else:
-        env["OBSIDIAN_VAULT"] = vaults[0]
+    """MCP client config entry for local/native installs."""
     return {
-        "command": str(PROJECT_ROOT / "scripts" / "obsidian-semantic-mcp"),
+        "command": "obsidian-semantic-mcp",
         "args": [],
-        "env": env,
+        "env": {},
     }
 
 

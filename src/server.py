@@ -47,8 +47,9 @@ import psycopg2
 import psycopg2.pool
 import requests
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+import anyio
+from mcp.shared.message import SessionMessage
+from mcp.types import Tool, TextContent, JSONRPCMessage
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
@@ -1681,7 +1682,37 @@ async def main():
         daemon=True,
     ).start()
 
-    async with stdio_server() as (read_stream, write_stream):
+    # Raw stdin/stdout transport — avoids anyio.wrap_file() EOF death.
+    # Uses blocking sys.stdin.buffer which waits forever instead of
+    # async-for over anyio_wrapped_stdin which exits when the client
+    # closes stdin between connection cycles.
+    read_writer, read_stream = anyio.create_memory_object_stream(0)
+    write_stream, write_reader = anyio.create_memory_object_stream(0)
+
+    async def _stdin_reader():
+        async with read_writer:
+            for line in sys.stdin.buffer:
+                line_str = line.decode("utf-8").strip()
+                if not line_str:
+                    continue
+                try:
+                    message = JSONRPCMessage.model_validate_json(line_str)
+                    await read_writer.send(SessionMessage(message))
+                except Exception as exc:
+                    await read_writer.send(exc)
+
+    async def _stdout_writer():
+        async with write_reader:
+            async for session_message in write_reader:
+                json_str = session_message.message.model_dump_json(
+                    by_alias=True, exclude_none=True
+                )
+                sys.stdout.write(json_str + "\n")
+                sys.stdout.flush()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_stdin_reader)
+        tg.start_soon(_stdout_writer)
         await server.run(
             read_stream,
             write_stream,
