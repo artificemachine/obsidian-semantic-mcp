@@ -297,18 +297,18 @@ class TestClaudeCfgPath:
 class TestEntries:
     def test_docker_entry_command_is_wrapper(self):
         entry = osm_init._docker_entry()
-        assert entry["command"] == str(osm_init.PROJECT_ROOT / "scripts" / "obsidian-semantic-mcp")
+        assert entry["command"] == "obsidian-semantic-mcp"
         assert entry["args"] == []
 
     def test_native_entry_command_is_wrapper(self):
         entry = osm_init._native_entry("/vault", "postgresql://localhost/db")
-        assert entry["command"] == str(osm_init.PROJECT_ROOT / "scripts" / "obsidian-semantic-mcp")
+        assert entry["command"] == "obsidian-semantic-mcp"
         assert entry["args"] == []
 
     def test_native_entry_env_vars(self):
         entry = osm_init._native_entry("/vault", "postgresql://localhost/db")
-        assert entry["env"]["OBSIDIAN_VAULT"] == "/vault"
-        assert entry["env"]["DATABASE_URL"] == "postgresql://localhost/db"
+        assert "OBSIDIAN_VAULT" not in entry["env"]
+        assert entry["env"] == {}
 
 
 # ── update_claude_config ──────────────────────────────────────────────────────

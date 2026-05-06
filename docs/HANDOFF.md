@@ -225,3 +225,171 @@ This was run on the v0.9.0 deploy and produced 2457 link edges across 314 notes 
 ### One-paragraph summary
 
 v0.9.0 adds a wikilink graph layer to retrieval. At index time, every `[[wikilink]]` in a note is extracted, resolved to an absolute path, and stored in `note_links` in the same DB transaction as the embedding. At query time, `search_vault` with `graph_expand: true` runs one hop of outgoing and incoming link traversal on the semantic top-K results and appends connected neighbors that didn't rank on their own. The new `get_note_connections` tool exposes the graph directly without requiring a query. The watcher and `delete_note()` keep both `_link_index` and `note_links` current on every file change, so the graph stays in sync without any background jobs.
+
+---
+
+## 7. v0.9.2 — MCP wrapper script (2026-05-04)
+
+**Released:** v0.9.2, PR [#35](https://github.com/celstnblacc/obsidian-semantic-mcp/pull/35), tag `v0.9.2`, GitHub release published, Docker Hub publish workflow triggered automatically on tag push.
+
+### Problem
+
+`osm init` wrote MCP client entries that inlined either `docker compose --project-directory <root> exec -T mcp-server python3 /app/src/server.py` or `<root>/.venv/bin/python3 <root>/src/server.py` directly into the client config. Both forms were brittle:
+
+- The Docker form failed when the container was stopped or recreated under a different name; clients had no fallback.
+- The native form hard-coded an absolute venv path that broke when the venv was rebuilt or relocated.
+- Switching between Docker and native installs required regenerating the client config.
+
+See `docs/mcp_startup_incident_2026-04-30.md` and `docs/mcp_failures_2026-04-30.md` for the incident timeline.
+
+### Fix
+
+Both `_docker_entry()` and `_native_entry()` in `osm_init.py` now emit a single `command`: the absolute path to `scripts/obsidian-semantic-mcp`, with empty `args`. The wrapper script:
+
+1. Probes for a running `mcp-server` container via `docker compose ps --status running -q mcp-server`. If found, `exec`s into it.
+2. Otherwise, sources `.env`, validates that `OBSIDIAN_VAULT(S)` and a Postgres credential are set, and execs the local venv Python against `src/server.py`.
+3. Fails loudly with a specific message when prerequisites are missing, instead of leaving the client hanging on a dead command.
+
+### Other changes
+
+- `.python-version` pinned to `3.11.6`. The previous value `3.14` was unintended and not available on the install host.
+- `uv.lock` synced to project version 0.9.2.
+- `tests/test_osm_commands.py` `TestEntries` rewritten to assert the wrapper-based shape (`command` is the wrapper path, `args == []`).
+
+### Compatibility
+
+Existing installs need to re-run `osm init` (or manually update their MCP client config) to pick up the new wrapper-based command entry. Old config entries continue to work as long as the container or venv path they reference still exists.
+
+### Verification still pending
+
+- Fresh install on a clean machine to confirm `osm init` writes the wrapper entry and clients connect on first try.
+- Stop the `mcp-server` container and confirm the wrapper falls back to the venv runtime cleanly.
+
+---
+
+## 9. v0.9.4 — MCP startup race fix (2026-05-06)
+
+**Released:** v0.9.4, PR [#37](https://github.com/celstnblacc/obsidian-semantic-mcp/pull/37), tag `v0.9.4`, GitHub release published, Docker Hub images pushed (amd64 + arm64).
+
+### Problem
+
+The v0.9.2 wrapper probed for the container once and fell through immediately if not found. On Mac wake from sleep or Docker Desktop restart, the daemon was up but the container was still starting — `docker compose ps --status running -q` returned empty, so the wrapper fell to the local venv fallback. Claude Code marks an MCP failed for the whole session if it doesn't respond within ~5 seconds; the unintended fallback was slower and not always ready in time.
+
+See `docs/mcp_startup_race_2026-05-06.md` for full analysis.
+
+### Fix
+
+Added a bounded polling loop (up to `OSM_DOCKER_WAIT=30` seconds, tunable) with a `docker info` short-circuit when the daemon is absent. The wrapper blocks until the container enters running state before deciding to exec into Docker or fall through to the local venv.
+
+---
+
+## 10. v0.9.5 — Python launcher + Docker Hub images (2026-05-06)
+
+**Status:** PR [#38](https://github.com/celstnblacc/obsidian-semantic-mcp/pull/38) open, auto-merge armed, CI running.
+
+### Problem
+
+Two issues addressed together:
+
+1. The MCP config hard-coded the local repo path to the bash wrapper, making it fragile and non-portable.
+2. `docker-compose.yml` used `build: .` for both `mcp-server` and `dashboard`, producing local build images (`obsidian-semantic-mcp-mcp-server:latest`) alongside the Docker Hub images — visible as duplicates in OrbStack.
+
+### Fix
+
+- **`src/launcher.py`** — new Python entry point replacing the bash wrapper. Docker mode is opt-in via `OSM_DOCKER=1` + `OSM_PROJECT_ROOT`. Default install (no `OSM_DOCKER`) runs the server in-process with no path dependencies.
+- **`docker-compose.yml`** — `build: .` replaced by `image: celestinmax/...:${OSM_VERSION:-latest}` for both services. No more local build artifacts.
+- **`scripts/obsidian-semantic-mcp`** — demoted to thin shim delegating to Python launcher (backwards compat for existing configs pointing at the script path).
+- **7 unit tests** in `tests/test_launcher.py` — all launcher code paths covered, no real Docker or Postgres required.
+- **`pyproject.toml`** — entry point updated to `src.launcher:main`, version bumped to `0.9.5`.
+
+### Post-merge migration step
+
+```bash
+# Install globally
+uv tool install obsidian-semantic-mcp
+
+# Update claude_desktop_config.json:
+# "command": "obsidian-semantic-mcp"   ← no path needed
+
+# For Docker mode (optional):
+# "env": { "OSM_DOCKER": "1", "OSM_PROJECT_ROOT": "/path/to/repo" }
+```
+
+### Deferred
+
+- After merge: create `v0.9.5` tag manually and push to trigger Docker Hub publish workflow (same pattern as v0.9.4).
+- Update `OSM_VERSION=0.9.5` in `.env` so the running stack pins to the released image instead of `latest`.
+
+---
+
+## 11. Architecture decision: containerized MCP server is correct (2026-05-06)
+
+### What happened this session
+
+After v0.9.5 shipped, the MCP config was updated to use the global install with `OSM_DOCKER=1` and `OSM_PROJECT_ROOT` pointing to the local repo. This was then questioned: why is the MCP server running in Docker at all if we have a global install?
+
+An attempt was made to remove containerization entirely — switching to a host-based MCP server connecting directly to Postgres on port 5433 and Ollama on port 11435. The mcp-server container was stopped.
+
+**This was a mistake.** The containerized approach is correct. Reasons:
+- Isolation and reproducibility — same environment as CI and everyone else who installs it
+- All Python deps managed in Docker, no host environment drift
+- The startup race was already fixed in v0.9.4
+- The only real problem was the hardcoded `OSM_PROJECT_ROOT` path in the MCP config
+
+### Current state (end of session — needs fixing)
+
+`claude_desktop_config.json` is currently set to the host-based approach:
+```json
+"obsidian-semantic": {
+  "command": "obsidian-semantic-mcp",
+  "env": {
+    "OBSIDIAN_VAULT": "/Users/airm2max/Documents/OBSIDIAN_ICLOUD/coredev",
+    "POSTGRES_HOST": "localhost",
+    "POSTGRES_PORT": "5433",
+    "POSTGRES_USER": "obsidian",
+    "POSTGRES_PASSWORD": "obsidian",
+    "OLLAMA_URL": "http://localhost:11435"
+  }
+}
+```
+
+The mcp-server container is stopped. The stack only has postgres + ollama running.
+
+### v0.9.6 plan — proper fix
+
+The root problem is that the launcher needs to know where the compose project is. The proper solution: `osm init` writes the project root to a well-known config file at install time. The launcher reads it automatically. No env vars needed in the MCP config.
+
+**Config file:** `~/.config/obsidian-semantic-mcp/project_root` (single line, absolute path)
+
+**`osm init` change:** after setting up the stack, write `PROJECT_ROOT` to this file.
+
+**Launcher change (`src/launcher.py`):** in Docker mode detection, read from config file if `OSM_PROJECT_ROOT` env var is not set:
+```python
+def _project_root() -> Path:
+    if env := os.environ.get("OSM_PROJECT_ROOT"):
+        return Path(env)
+    config = Path.home() / ".config" / "obsidian-semantic-mcp" / "project_root"
+    if config.exists():
+        return Path(config.read_text().strip())
+    return Path(__file__).resolve().parent.parent
+```
+
+**Default Docker mode:** change `OSM_DOCKER` default to `"1"` when the config file exists, so no env var needed at all.
+
+**Target MCP config (v0.9.6):**
+```json
+"obsidian-semantic": {
+  "command": "obsidian-semantic-mcp",
+  "args": [],
+  "env": {}
+}
+```
+
+Fully containerized. Fully path-agnostic. No env vars required.
+
+### Next session tasks
+
+1. Restore MCP config to containerized approach (interim: add `OSM_DOCKER=1` + `OSM_PROJECT_ROOT` back while v0.9.6 is being built)
+2. Restart mcp-server container: `docker compose --project-directory ~/DevOpsSec/obsidian-semantic-mcp up -d mcp-server`
+3. Implement v0.9.6: `osm init` writes config file, launcher reads it, Docker mode is default when config file exists
+4. Ship v0.9.6 and update MCP config to empty env block
