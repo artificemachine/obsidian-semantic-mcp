@@ -92,6 +92,7 @@ services:
     volumes:
       - ${OBSIDIAN_VAULT:-.}:/vault
       # - /path/to/vault2:/vault2  # add for multi-vault
+      - ./src/server.py:/app/src/server.py:ro  # patched: await anyio.sleep(0) on heartbeat lines
     # stdio transport — MCP clients use `docker compose exec -T mcp-server ...`
     stdin_open: true
     healthcheck:

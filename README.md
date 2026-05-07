@@ -113,12 +113,17 @@ It then:
 - Installs prerequisites or verifies they already exist (Docker is installed and started automatically if missing)
 - Pulls `nomic-embed-text` if needed
 - Writes a `.env` file (gitignored) with your vault path and credentials
-- Updates MCP client config automatically for **Claude Desktop**, **Claude Code CLI**, and **OpenCode** (whichever are installed)
+- Updates MCP client config automatically for **Claude Desktop**, **Claude Code CLI**, **OpenCode**, and **pi** (whichever are installed)
 - Uses the repo launcher script in generated MCP entries, so startup does not depend on a raw Docker command or container-name-specific config
 
 ### 2. Restart your MCP client(s)
 
-Restart Claude Desktop / OpenCode to pick up the new server. For Claude Code CLI, the entry is registered live; verify with `claude mcp list`.
+Restart Claude Desktop / OpenCode to pick up the new server. For Claude Code CLI, the entry is registered live; verify with `claude mcp list`. For pi, run `/reload` inside an active session or restart pi.
+
+> **pi users:** `osm init` also patches `~/.pi/agent/extensions/mcp-bridge.ts` if
+> present. obsidian-semantic requires `heartbeat: true` and a spawn-time heartbeat
+> in the bridge due to its blocking asyncio stdin transport. See
+> [`docs/pi_mcp_bridge_heartbeat.md`](docs/pi_mcp_bridge_heartbeat.md) for details.
 
 > **Manual config (only if `osm init` could not detect your client)**
 >

@@ -340,3 +340,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - MCP stdio transport: replaced `mcp.server.stdio.stdio_server` with raw `sys.stdin.buffer` feeding anyio memory streams. Fixes "-32000: Connection closed" when the MCP client reconnects between sessions (anyio.wrap_file EOF bug).
 ### Changed
 - MCP client configurations are now zero-config (empty env block, path-agnostic obsidian-semantic-mcp command).
+- 2026-05-07: pi agent support — osm init now registers obsidian-semantic in ~/.pi/agent/mcp.json (heartbeat: true) and patches mcp-bridge.ts to start heartbeat at spawn time, fixing permanent deadlock on initialize

@@ -1694,6 +1694,7 @@ async def main():
             for line in sys.stdin.buffer:
                 line_str = line.decode("utf-8").strip()
                 if not line_str:
+                    await anyio.sleep(0)  # yield to event loop so other tasks (e.g. _stdout_writer) can run
                     continue
                 try:
                     message = JSONRPCMessage.model_validate_json(line_str)

@@ -1092,18 +1092,210 @@ def remove_opencode_config():
         warn(f"Could not parse {path} — remove entry manually")
 
 
+# ── pi agent (earendil-works/pi) config ──────────────────────────────────────
+
+
+def _pi_agent_mcp_path() -> Path:
+    """pi agent MCP server config: ~/.pi/agent/mcp.json"""
+    return Path.home() / ".pi" / "agent" / "mcp.json"
+
+
+def _pi_agent_ext_path() -> Path:
+    """pi mcp-bridge extension: ~/.pi/agent/extensions/mcp-bridge.ts"""
+    return Path.home() / ".pi" / "agent" / "extensions" / "mcp-bridge.ts"
+
+
+_MCP_BRIDGE_SPAWN_HEARTBEAT_MARKER = "// Start heartbeat immediately at spawn time"
+
+
+def _patch_pi_mcp_bridge(ext_path: Path):
+    """Patch mcp-bridge.ts to start the heartbeat at spawn time rather than
+    after the initialize response.
+
+    obsidian-semantic uses a blocking ``for line in sys.stdin.buffer:`` loop
+    as its asyncio stdin transport.  That loop freezes the event loop between
+    reads, so MCP responses can only be flushed when the next line arrives.
+    The heartbeat (periodic \\n writes) must therefore start *before*
+    ``initialize`` is sent — otherwise initialize itself deadlocks.
+
+    See docs/pi_mcp_bridge_heartbeat.md for the full explanation.
+    """
+    if not ext_path.exists():
+        warn("pi mcp-bridge extension not found — manual step required:")
+        info(f"  Ensure {ext_path} starts heartbeat in spawnServer(), not initializeServer()")
+        info("  See docs/pi_mcp_bridge_heartbeat.md for the exact patch")
+        return
+
+    src = ext_path.read_text()
+
+    if _MCP_BRIDGE_SPAWN_HEARTBEAT_MARKER in src:
+        ok("pi mcp-bridge: heartbeat-at-spawn fix already applied")
+        return
+
+    OLD_HB_COMMENT = "// Start heartbeat if configured (keeps stdin-fed event loops alive)"
+    if OLD_HB_COMMENT not in src:
+        warn("pi mcp-bridge: unrecognized format — skipping auto-patch")
+        info("  See docs/pi_mcp_bridge_heartbeat.md for the required change")
+        return
+
+    SPAWN_HB_BLOCK = (
+        "\n"
+        "  // Start heartbeat immediately at spawn time for servers that need it.\n"
+        "  // Servers using a blocking `for line in sys.stdin.buffer:` loop freeze\n"
+        "  // their asyncio event loop between reads. A periodic \\n yields the loop\n"
+        "  // so MCP responses can be written — must start before initialize.\n"
+        "  if (config.heartbeat && proc.stdin) {\n"
+        "    const heartbeatTimer = setInterval(() => {\n"
+        "      try {\n"
+        '        proc.stdin?.write("\\n");\n'
+        "      } catch {\n"
+        "        clearInterval(heartbeatTimer);\n"
+        "      }\n"
+        "    }, 200);\n"
+        '    proc.on("close", () => clearInterval(heartbeatTimer));\n'
+        "  }"
+    )
+
+    INSERT_AFTER = '    buffer: "",\n  };'
+    if INSERT_AFTER not in src:
+        warn("pi mcp-bridge: can't find insertion point in spawnServer() — skipping patch")
+        info("  See docs/pi_mcp_bridge_heartbeat.md for the required change")
+        return
+
+    # Insert spawn-time heartbeat block
+    src = src.replace(INSERT_AFTER, INSERT_AFTER + "\n" + SPAWN_HB_BLOCK)
+
+    # Remove the old heartbeat block from initializeServer() and simplify tools/list
+    OLD_INIT_HB = (
+        "  // Start heartbeat if configured (keeps stdin-fed event loops alive)\n"
+        "  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;\n"
+        "  if (config.heartbeat && server.process.stdin) {\n"
+        "    heartbeatTimer = setInterval(() => {\n"
+        "      try {\n"
+        '        server.process.stdin?.write("\\n");\n'
+        "      } catch {\n"
+        "        // stdin closed, stop heartbeat\n"
+        "        if (heartbeatTimer) clearInterval(heartbeatTimer);\n"
+        "      }\n"
+        "    }, 200);\n"
+        "  }\n"
+        "\n"
+        "  try {\n"
+        "    // Discover tools\n"
+        "    const result = (await sendRequest(server, \"tools/list\")) as { tools: ToolDef[] };\n"
+        "    return result.tools ?? [];\n"
+        "  } finally {\n"
+        "    if (heartbeatTimer) clearInterval(heartbeatTimer);\n"
+        "  }"
+    )
+    NEW_DISCOVER = (
+        "  // Discover tools\n"
+        "  const result = (await sendRequest(server, \"tools/list\")) as { tools: ToolDef[] };\n"
+        "  return result.tools ?? [];"
+    )
+
+    if OLD_INIT_HB in src:
+        src = src.replace(OLD_INIT_HB, NEW_DISCOVER)
+        if DRY_RUN:
+            _dry(f"patch {ext_path}", "move heartbeat from initializeServer to spawnServer")
+        else:
+            ext_path.write_text(src)
+            ok(f"pi mcp-bridge: patched — heartbeat now starts at spawn time")
+    else:
+        if DRY_RUN:
+            _dry(f"patch {ext_path}", "move heartbeat from initializeServer to spawnServer")
+        else:
+            warn("pi mcp-bridge: heartbeat section format not recognized — manual patch needed")
+            info("  See docs/pi_mcp_bridge_heartbeat.md")
+
+
+def register_pi_agent():
+    """Register obsidian-semantic with pi's mcp-bridge extension.
+
+    pi uses its own ~/.pi/agent/mcp.json registry (separate from
+    claude_desktop_config.json).  The entry requires ``heartbeat: true``
+    because obsidian-semantic's asyncio transport uses a blocking stdin loop
+    that freezes the event loop between reads — periodic \\n newlines yield
+    the loop so responses can be flushed.
+
+    This function also patches ~/.pi/agent/extensions/mcp-bridge.ts when
+    present: the heartbeat must start at spawn time, not after initialize,
+    because initialize itself depends on the same yield mechanism.
+
+    Silently skips when the ``pi`` binary is not on PATH.
+    """
+    if not cmd_exists("pi"):
+        return
+
+    mcp_path = _pi_agent_mcp_path()
+    ext_path = _pi_agent_ext_path()
+
+    new_entry = {
+        "name": "obsidian-semantic",
+        "command": "docker",
+        "args": [
+            "compose",
+            "--project-directory", str(PROJECT_ROOT),
+            "exec", "-T", "mcp-server",
+            "python3", "/app/src/server.py",
+        ],
+        "env": {},
+        "heartbeat": True,
+    }
+
+    if DRY_RUN:
+        _dry(
+            f"write {mcp_path}",
+            "add obsidian-semantic entry with heartbeat: true",
+        )
+        _patch_pi_mcp_bridge(ext_path)
+        return
+
+    # Read or initialise mcp.json
+    cfg: dict = {"servers": []}
+    if mcp_path.exists():
+        try:
+            cfg = json.loads(mcp_path.read_text())
+        except json.JSONDecodeError:
+            warn(f"Could not parse {mcp_path} — servers list will be reset")
+
+    servers: list = cfg.get("servers", [])
+    idx = next(
+        (i for i, s in enumerate(servers) if s.get("name") == "obsidian-semantic"),
+        None,
+    )
+
+    if idx is not None:
+        if servers[idx] == new_entry:
+            ok("pi agent: obsidian-semantic already configured correctly")
+        else:
+            servers[idx] = new_entry
+            cfg["servers"] = servers
+            mcp_path.write_text(json.dumps(cfg, indent=2) + "\n")
+            ok(f"pi agent: updated obsidian-semantic in {mcp_path}")
+    else:
+        servers.append(new_entry)
+        cfg["servers"] = servers
+        mcp_path.write_text(json.dumps(cfg, indent=2) + "\n")
+        ok(f"pi agent: registered obsidian-semantic in {mcp_path}")
+        info("Use /reload in pi to pick up the new server")
+
+    _patch_pi_mcp_bridge(ext_path)
+
+
 # ── Cross-client registration fan-out ─────────────────────────────────────────
 
 
 def register_with_clients(entry):
     """Register the MCP entry with every supported client in one shot.
 
-    Today: Claude Desktop, Claude Code CLI, OpenCode. Adding a new client
-    (Continue, Cursor, Codex CLI, ...) is a one-line change here.
+    Today: Claude Desktop, Claude Code CLI, OpenCode, pi agent. Adding a new
+    client (Continue, Cursor, Codex CLI, ...) is a one-line change here.
     """
     update_claude_config(entry)
     register_claude_cli(entry)
     update_opencode_config(entry)
+    register_pi_agent()
     _write_project_root_config()
 
 
@@ -1453,7 +1645,7 @@ def mode_native_macos():
     ok("Dependencies installed in .venv")
 
     # ── Claude Desktop + CLI config ───────────────────────────────────────────
-    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode)")
+    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
     entry = _native_entry(vault, db_url)
     register_with_clients(entry)
 
@@ -1500,7 +1692,7 @@ def mode_full_docker():
     # Pull the embedding model so indexing works on first run.
     _ensure_ollama_model("http://localhost:11435")
 
-    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode)")
+    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
     entry = _docker_entry()
     register_with_clients(entry)
     _done_docker()
@@ -1551,7 +1743,7 @@ def mode_docker_host_ollama():
     compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
     wait_for_postgres()
 
-    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode)")
+    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
     entry = _docker_entry()
     register_with_clients(entry)
     _done_docker()
@@ -1704,7 +1896,7 @@ def mode_docker_remote_ollama():
     compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
     wait_for_postgres()
 
-    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode)")
+    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
     entry = _docker_entry()
     register_with_clients(entry)
     _done_docker_remote(ssh_user, remote_host, remote_port, local_tunnel_port, key_path)
@@ -2077,6 +2269,17 @@ def cmd_update():
         print(f"    curl -fsSL {_INSTALL_URL} | bash")
     else:
         ok(f"CLI is up to date (v{installed})")
+
+    # Re-run client registration so any newly installed clients get configured
+    # and mcp-bridge patches are applied even if they were installed after osm init.
+    print()
+    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
+    hr()
+    entry = _docker_entry()
+    update_claude_config(entry)
+    register_claude_cli(entry)
+    update_opencode_config(entry)
+    register_pi_agent()
 
 
 # ── Remove command ────────────────────────────────────────────────────────────
