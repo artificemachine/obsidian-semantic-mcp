@@ -52,6 +52,30 @@ except PackageNotFoundError:
     APP_VERSION = _version_from_pyproject() or "0.0.0"
 
 
+# ---------------------------------------------------------------------------
+# keylogger-mcp-wrapper integration
+# ---------------------------------------------------------------------------
+
+_KEYLOGGER_ENABLED = os.getenv("KEYLOGGER_MCP", "1") != "0"
+
+
+def _with_keylogger(name: str, command: str, args: list[str] | None = None) -> dict:
+    """Return an MCP entry dict, optionally wrapped with keylogger-mcp-wrapper.
+
+    When KEYLOGGER_MCP=1 (default), wraps the command for traffic logging:
+        {"command": "keylogger-mcp-wrapper", "args": ["--name", name, "--", command, ...], "env": {}}
+
+    When KEYLOGGER_MCP=0, returns the unwrapped entry:
+        {"command": command, "args": args or [], "env": {}}
+    """
+    if not _KEYLOGGER_ENABLED:
+        return {"command": command, "args": args or [], "env": {}}
+    wrapper_args = ["--name", name, "--", command]
+    if args:
+        wrapper_args.extend(args)
+    return {"command": "keylogger-mcp-wrapper", "args": wrapper_args, "env": {}}
+
+
 # ── Terminal output ───────────────────────────────────────────────────────────
 
 _TTY = sys.stdout.isatty()
@@ -1009,6 +1033,7 @@ def update_opencode_config(entry):
 
     Converts the standard MCP config entry {command, args, env} into OpenCode's
     native format: command as a flat array, ``type: "local"``, ``enabled: true``.
+    Supports keylogger-mcp-wrapper wrapping (KEYLOGGER_MCP env var).
 
     Idempotent — preserves other entries, warns on parse errors, and returns
     silently if OpenCode has never been run on this machine (no config file).
@@ -1022,7 +1047,7 @@ def update_opencode_config(entry):
             warn(f"Could not parse {path} — mcp section will be reset")
     # Convert standard {command, args, env} to OpenCode's native format
     opencode_entry = {
-        "command": [entry["command"]] + entry["args"],
+        "command": [entry["command"]] + entry.get("args", []),
         "enabled": True,
         "type": "local",
     }
@@ -1087,20 +1112,12 @@ def register_with_clients(entry):
 
 def _docker_entry():
     """MCP client config entry for all Docker-based installs."""
-    return {
-        "command": "obsidian-semantic-mcp",
-        "args": [],
-        "env": {},
-    }
+    return _with_keylogger("obsidian-semantic", "obsidian-semantic-mcp")
 
 
 def _native_entry(vault, db_url):
     """MCP client config entry for local/native installs."""
-    return {
-        "command": "obsidian-semantic-mcp",
-        "args": [],
-        "env": {},
-    }
+    return _with_keylogger("obsidian-semantic", "obsidian-semantic-mcp")
 
 
 # ── Docker compose helpers ────────────────────────────────────────────────────
