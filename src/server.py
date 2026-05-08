@@ -1682,19 +1682,37 @@ async def main():
         daemon=True,
     ).start()
 
-    # Raw stdin/stdout transport — avoids anyio.wrap_file() EOF death.
-    # Uses blocking sys.stdin.buffer which waits forever instead of
-    # async-for over anyio_wrapped_stdin which exits when the client
-    # closes stdin between connection cycles.
+    # Raw stdin/stdout transport — avoids two known bugs:
+    #   1. anyio.wrap_file() EOF death (May 7 2026): anyio's async-for over
+    #      stdin exits when the client closes stdin between cycles, taking
+    #      the server down. Solved by using a blocking readline that
+    #      waits forever and treats EOF as "idle, retry."
+    #   2. Blocking-loop event-loop freeze (May 8 2026): a synchronous
+    #      `for line in sys.stdin.buffer:` in an async coroutine blocks
+    #      the entire asyncio event loop, so `_stdout_writer` cannot
+    #      schedule and the response is never written. Symptom: Claude
+    #      Code times out at 30s during initialize over a pipe that
+    #      stays open. Solved by offloading the blocking readline to a
+    #      worker thread via anyio.to_thread.run_sync, which keeps the
+    #      event loop free between reads.
     read_writer, read_stream = anyio.create_memory_object_stream(0)
     write_stream, write_reader = anyio.create_memory_object_stream(0)
 
     async def _stdin_reader():
         async with read_writer:
-            for line in sys.stdin.buffer:
+            while True:
+                # Thread-offload the blocking readline so the event loop
+                # stays free for _stdout_writer and server.run.
+                line = await anyio.to_thread.run_sync(sys.stdin.buffer.readline)
+                if not line:
+                    # EOF: stdin closed. Don't exit — Claude Desktop
+                    # closes stdin between cycles. Sleep briefly and
+                    # retry; the thread offload will block in-thread
+                    # until new data arrives or stdin is fully gone.
+                    await anyio.sleep(0.1)
+                    continue
                 line_str = line.decode("utf-8").strip()
                 if not line_str:
-                    await anyio.sleep(0)  # yield to event loop so other tasks (e.g. _stdout_writer) can run
                     continue
                 try:
                     message = JSONRPCMessage.model_validate_json(line_str)
