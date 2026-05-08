@@ -342,3 +342,5 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - MCP client configurations are now zero-config (empty env block, path-agnostic obsidian-semantic-mcp command).
 - 2026-05-07: pi agent support — osm init now registers obsidian-semantic in ~/.pi/agent/mcp.json (heartbeat: true) and patches mcp-bridge.ts to start heartbeat at spawn time, fixing permanent deadlock on initialize
 - 2026-05-08: fix(transport): stdin reader uses anyio.to_thread.run_sync for sys.stdin.buffer.readline — prevents event-loop freeze that caused 30s initialize timeout when MCP client (Claude Code) spawns over anonymous pipes with stdin held open. Preserves the May 7 raw-stdin transport's no-EOF-death property by treating empty readline as idle-retry, not exit. (v0.10.1)
+- 2026-05-08: detect MCP-host Stop-hook kill regressions — log clear diagnostic on SIGTERM/SIGHUP within 60s of startup (points at `verify-mcp-stop-hook` and the Stop hook entry in $HOME/.claude/settings.json)
+- 2026-05-08: chore: bump version to 0.10.2 (patch — external-kill diagnostic for Stop-hook regression detection)

@@ -928,7 +928,35 @@ def background_init(vaults: list[str]):
 
 # ─────────────────────────── Shutdown Handler ────────────────────────────────
 
-def _shutdown():
+_STARTED_AT: float | None = None
+
+
+def _log_external_kill_diagnostic(signame: str) -> None:
+    """Log a hint when killed early — likely an MCP host Stop-hook regression.
+
+    In Claude Code, the `Stop` event fires at the end of every assistant turn,
+    not at session exit. If a Stop hook pkills MCP children, this server gets
+    killed between turns. Run `verify-mcp-stop-hook` to detect the regression
+    in the Claude Code settings file.
+    """
+    import time as _time
+    if _STARTED_AT is None:
+        return
+    uptime = _time.monotonic() - _STARTED_AT
+    log.warning(
+        "obsidian-semantic-mcp received %s after %.1fs of uptime — exiting",
+        signame, uptime,
+    )
+    if uptime < 60:
+        log.warning(
+            "Killed within 60s of startup. If this also fires every assistant turn, "
+            "your MCP host is killing child processes via a Stop hook. Run "
+            "`verify-mcp-stop-hook` to detect a regression in the Stop hook entry. "
+            "The `Stop` event fires per-turn, not per-session."
+        )
+
+
+def _shutdown(signame: str = "signal"):
     """Stop the watcher and close the DB pool, then cancel the event loop.
 
     Called via loop.add_signal_handler() so it runs on the event loop thread,
@@ -936,6 +964,7 @@ def _shutdown():
     Blocking operations (observer.join) are intentionally absent — the daemon
     thread will be killed when the process exits.
     """
+    _log_external_kill_diagnostic(signame)
     log.info("Shutting down…")
     for obs in _observers:
         obs.stop()
@@ -1665,15 +1694,23 @@ async def main():
 
     log.info("Vaults: %s", ", ".join(VAULT_PATHS))
 
+    import time as _time
+    global _STARTED_AT
+    _STARTED_AT = _time.monotonic()
+
     loop = asyncio.get_event_loop()
     if sys.platform != "win32":
-        loop.add_signal_handler(signal.SIGTERM, _shutdown)
-        loop.add_signal_handler(signal.SIGINT, _shutdown)
+        loop.add_signal_handler(signal.SIGTERM, lambda: _shutdown("SIGTERM"))
+        loop.add_signal_handler(signal.SIGINT, lambda: _shutdown("SIGINT"))
+        try:
+            loop.add_signal_handler(signal.SIGHUP, lambda: _shutdown("SIGHUP"))
+        except (AttributeError, NotImplementedError):
+            pass
     else:
         # Windows: add_signal_handler is not implemented on ProactorEventLoop.
         # signal.signal() on the main thread is the fallback.
-        signal.signal(signal.SIGINT, lambda *_: _shutdown())
-        signal.signal(signal.SIGTERM, lambda *_: _shutdown())
+        signal.signal(signal.SIGINT, lambda *_: _shutdown("SIGINT"))
+        signal.signal(signal.SIGTERM, lambda *_: _shutdown("SIGTERM"))
 
     # Full index + watchers start in background — server is immediately ready
     threading.Thread(
