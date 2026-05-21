@@ -236,6 +236,81 @@ class TestWriteEnv:
         assert any(".env" in a for a in osm_init._DRY_ACTIONS)
 
 
+# ── _resolve_project_root ─────────────────────────────────────────────────────
+
+class TestResolveProjectRoot:
+    def test_env_override_wins(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OSM_PROJECT_ROOT", str(tmp_path))
+        assert osm_init._resolve_project_root() == tmp_path
+
+    def test_config_file_used(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OSM_PROJECT_ROOT", raising=False)
+        deploy = tmp_path / "deploy"
+        deploy.mkdir()
+        cfg = tmp_path / "project_root"
+        cfg.write_text(str(deploy), encoding="utf-8")
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT_FILE", cfg)
+        assert osm_init._resolve_project_root() == deploy
+
+    def test_co_located_compose(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OSM_PROJECT_ROOT", raising=False)
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT_FILE", tmp_path / "absent")
+        code = tmp_path / "code"
+        code.mkdir()
+        (code / "docker-compose.yml").write_text("services: {}\n")
+        monkeypatch.setattr(osm_init, "_CODE_DIR", code)
+        assert osm_init._resolve_project_root() == code
+
+    def test_default_deploy_dir(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OSM_PROJECT_ROOT", raising=False)
+        monkeypatch.delenv("OSM_DATA_DIR", raising=False)
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT_FILE", tmp_path / "absent")
+        empty = tmp_path / "no_compose"
+        empty.mkdir()
+        monkeypatch.setattr(osm_init, "_CODE_DIR", empty)
+        assert osm_init._resolve_project_root() == tmp_path / "obsidian-semantic-mcp"
+
+
+# ── _ensure_deploy_dir ────────────────────────────────────────────────────────
+
+class TestEnsureDeployDir:
+    def test_noop_when_compose_present(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "DRY_RUN", False)
+        root = tmp_path / "deploy"
+        root.mkdir()
+        (root / "docker-compose.yml").write_text("services: {}\n")
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", root)
+        code = tmp_path / "code"
+        code.mkdir()
+        (code / "docker-compose.yml").write_text("PACKAGED\n")
+        monkeypatch.setattr(osm_init, "_CODE_DIR", code)
+        osm_init._ensure_deploy_dir()
+        assert (root / "docker-compose.yml").read_text() == "services: {}\n"
+
+    def test_provisions_when_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "DRY_RUN", False)
+        root = tmp_path / "deploy"
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", root)
+        code = tmp_path / "code"
+        code.mkdir()
+        (code / "docker-compose.yml").write_text("PACKAGED\n")
+        monkeypatch.setattr(osm_init, "_CODE_DIR", code)
+        osm_init._ensure_deploy_dir()
+        assert (root / "docker-compose.yml").read_text() == "PACKAGED\n"
+
+    def test_dry_run_does_not_copy(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "DRY_RUN", True)
+        root = tmp_path / "deploy"
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", root)
+        code = tmp_path / "code"
+        code.mkdir()
+        (code / "docker-compose.yml").write_text("PACKAGED\n")
+        monkeypatch.setattr(osm_init, "_CODE_DIR", code)
+        osm_init._ensure_deploy_dir()
+        assert not root.exists()
+
+
 # ── _default_ssh_key ──────────────────────────────────────────────────────────
 
 class TestDefaultSshKey:

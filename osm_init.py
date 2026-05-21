@@ -307,7 +307,45 @@ def prompt_persistent_storage(include_ollama=False):
 
 # ── Prerequisite checks ───────────────────────────────────────────────────────
 
-PROJECT_ROOT = Path(__file__).parent.resolve()
+OSM_CONFIG_DIR = Path.home() / ".config" / "obsidian-semantic-mcp"
+PROJECT_ROOT_FILE = OSM_CONFIG_DIR / "project_root"
+
+# Directory holding this module. In an editable / dev / install.sh layout the
+# compose stack lives here; in a wheel install it does not.
+_CODE_DIR = Path(__file__).parent.resolve()
+
+
+def _default_deploy_dir() -> Path:
+    """Stable, code-independent location for the runtime stack."""
+    override = os.environ.get("OSM_DATA_DIR")
+    if override:
+        return Path(override)
+    xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(xdg) / "obsidian-semantic-mcp"
+
+
+def _resolve_project_root() -> Path:
+    """Locate the docker-compose project dir, independent of where this code lives.
+
+    Order: OSM_PROJECT_ROOT env -> recorded config -> co-located compose
+    (dev checkout / install.sh self-contained dir) -> default deploy dir.
+    """
+    env = os.environ.get("OSM_PROJECT_ROOT")
+    if env:
+        return Path(env)
+    if PROJECT_ROOT_FILE.exists():
+        try:
+            recorded = PROJECT_ROOT_FILE.read_text(encoding="utf-8").strip()
+            if recorded:
+                return Path(recorded)
+        except OSError:
+            pass
+    if (_CODE_DIR / "docker-compose.yml").exists():
+        return _CODE_DIR
+    return _default_deploy_dir()
+
+
+PROJECT_ROOT = _resolve_project_root()
 EMBED_MODEL = "nomic-embed-text"
 
 
@@ -875,8 +913,27 @@ def write_env(
     env_path.chmod(0o600)  # contains POSTGRES_PASSWORD — owner-only read/write
     ok(f"Wrote {env_path}")
 
-OSM_CONFIG_DIR = Path.home() / ".config" / "obsidian-semantic-mcp"
-PROJECT_ROOT_FILE = OSM_CONFIG_DIR / "project_root"
+def _ensure_deploy_dir():
+    """Ensure the resolved PROJECT_ROOT exists and holds docker-compose.yml.
+
+    For wheel / pip installs the compose file is not co-located with the code,
+    so copy the packaged copy into the deploy dir. No-op when it is already
+    present (editable / install.sh / dev checkout).
+    """
+    compose = PROJECT_ROOT / "docker-compose.yml"
+    if compose.exists():
+        return
+    packaged = _CODE_DIR / "docker-compose.yml"
+    if DRY_RUN:
+        _dry(f"mkdir -p {PROJECT_ROOT}", "deploy dir")
+        _dry(f"copy {packaged} -> {compose}")
+        return
+    if not packaged.exists():
+        fail(f"No docker-compose.yml at {PROJECT_ROOT} and none packaged at {_CODE_DIR}")
+        sys.exit(1)
+    PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(packaged, compose)
+    ok(f"Provisioned compose stack into {PROJECT_ROOT}")
 
 
 def _write_project_root_config():
@@ -1643,6 +1700,8 @@ def mode_full_docker():
     if not check_docker() or not check_compose():
         sys.exit(1)
 
+    _ensure_deploy_dir()
+
     vaults = prompt_vault()
     pg_pw = prompt_pg_password()
     pgdata_path, ollama_data_path = prompt_persistent_storage(include_ollama=True)
@@ -1691,6 +1750,8 @@ def mode_docker_host_ollama():
 
     if not check_docker() or not check_compose():
         sys.exit(1)
+
+    _ensure_deploy_dir()
 
     if not check_ollama_at("localhost"):
         fail("Ollama is not running — start it first:  ollama serve")
@@ -1804,6 +1865,8 @@ def mode_docker_remote_ollama():
 
     if not check_docker() or not check_compose():
         sys.exit(1)
+
+    _ensure_deploy_dir()
 
     # ── SSH credentials ───────────────────────────────────────────────────────
     header("Remote host & SSH credentials")
