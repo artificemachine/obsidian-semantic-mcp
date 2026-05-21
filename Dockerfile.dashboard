@@ -5,12 +5,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 COPY pyproject.toml uv.lock README.md ./
+# Wheel build (uv sync --no-editable) needs every force-included file present.
+COPY src/ ./src/
+COPY osm_init.py obsidian_semantic_mcp.py docker-compose.yml ./
 RUN uv sync --frozen --no-dev --no-editable
 
 ENV PATH="/app/.venv/bin:$PATH"
-
-COPY src/ src/
-COPY obsidian_semantic_mcp.py ./
 
 RUN useradd -r -s /bin/false appuser
 USER appuser
