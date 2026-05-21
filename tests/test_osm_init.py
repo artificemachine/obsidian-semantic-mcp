@@ -197,6 +197,14 @@ class TestWriteEnv:
         self._call(tmp_path, ollama_data_path="/data/ollama")
         assert "OLLAMA_DATA_PATH=/data/ollama" in (tmp_path / ".env").read_text()
 
+    def test_includes_compose_profiles(self, tmp_path):
+        self._call(tmp_path, compose_profiles="full-docker")
+        assert "COMPOSE_PROFILES=full-docker" in (tmp_path / ".env").read_text()
+
+    def test_omits_compose_profiles_by_default(self, tmp_path):
+        self._call(tmp_path)
+        assert "COMPOSE_PROFILES" not in (tmp_path / ".env").read_text()
+
     def test_includes_ssh_params(self, tmp_path):
         self._call(tmp_path, ssh_params={
             "user": "bob", "host": "myserver",

@@ -106,7 +106,7 @@ def run(cmd, check=True, capture=False, env=None):
         cmd_str = cmd if isinstance(cmd, str) else " ".join(str(a) for a in cmd)
         _dry(cmd_str)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-    kwargs = {"shell": isinstance(cmd, str), "check": check}
+    kwargs: dict = {"shell": isinstance(cmd, str), "check": check}
     if env:
         kwargs["env"] = env
     if capture:
@@ -814,6 +814,7 @@ def write_env(
     ssh_params=None,
     pgdata_path=None,
     ollama_data_path=None,
+    compose_profiles=None,
 ):
     """
     Write .env in the project root at runtime. This file is gitignored.
@@ -846,6 +847,11 @@ def write_env(
         lines.append(f"PGDATA_PATH={pgdata_path}")
     if ollama_data_path:
         lines.append(f"OLLAMA_DATA_PATH={ollama_data_path}")
+    if compose_profiles:
+        # Persist the active profile so every `docker compose` in this dir
+        # (bare `up -d`, the RUNBOOK `down -v; up -d`, restarts) brings up the
+        # embeddings engine. Without it, full-docker installs silently lose Ollama.
+        lines.append(f"COMPOSE_PROFILES={compose_profiles}")
     if ssh_params:
         lines += [
             "",
@@ -1226,6 +1232,8 @@ def register_pi_agent():
         _patch_pi_mcp_bridge(ext_path)
         return
 
+    mcp_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Read or initialise mcp.json
     cfg: dict = {"servers": []}
     if mcp_path.exists():
@@ -1487,6 +1495,7 @@ def compose_up(services=None, env=None):
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kw
     )
     captured = []
+    assert proc.stdout is not None  # Popen above sets stdout=PIPE
     for line in proc.stdout:
         print(line, end="", flush=True)
         captured.append(line)
@@ -1643,6 +1652,7 @@ def mode_full_docker():
         "http://ollama:11434",
         pgdata_path=pgdata_path,
         ollama_data_path=ollama_data_path,
+        compose_profiles="full-docker",
     )
     _write_compose_override(vaults)
 

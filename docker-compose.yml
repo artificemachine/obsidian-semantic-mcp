@@ -50,9 +50,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4g
-        reservations:
           memory: 1g
+        reservations:
+          memory: 256m
     logging:
       driver: json-file
       options:
@@ -96,7 +96,9 @@ services:
     # stdio transport — MCP clients use `docker compose exec -T mcp-server ...`
     stdin_open: true
     healthcheck:
-      test: ["CMD", "python3", "-c", "import sys; sys.exit(0)"]
+      # Verify the embeddings backend is reachable, so a missing Ollama shows
+      # as `unhealthy` instead of a green-but-search-dead server.
+      test: ["CMD", "python3", "-c", "import os,urllib.request; urllib.request.urlopen(os.environ['OLLAMA_URL'].rstrip('/')+'/api/tags', timeout=4)"]
       interval: 30s
       timeout: 5s
       retries: 3
