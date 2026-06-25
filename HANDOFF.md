@@ -8,7 +8,7 @@
 
 ## 2026-05-08 PM session: Phase 2 — portable-paths cleanup + transport fix
 
-Cross-repo cleanup tracked in `$HOME/DevOpsSec/superharness/docs/PLAN-portable-paths-cleanup.md`.
+Cross-repo cleanup tracked in the superharness docs.
 This project is phase 2 of 4.
 
 ### Root cause of MCP failure (separate from portable-paths)
@@ -91,7 +91,7 @@ This guarantees `$HOME/.claude.json` etc. can drop the
 1. **Rebuild the image so the fix persists.** Tag a new version (v0.10.1 or
    v0.11.0). The current `latest` tag still has the broken stdin reader.
    ```bash
-   cd $HOME/DevOpsSec/obsidian-semantic-mcp
+   cd obsidian-semantic-mcp
    # bump OSM_VERSION in .env or pyproject.toml
    docker compose build mcp-server
    docker tag celestinmax/obsidian-semantic-mcp:latest celestinmax/obsidian-semantic-mcp:<new-version>

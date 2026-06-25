@@ -1,6 +1,6 @@
 # Design Scope: repo-independent `osm` install
 
-**Date:** 2026-05-21 | **Status:** scoping | **Trigger:** the dev `osm` install points at `~/DevOpsSec/obsidian-semantic-mcp` and breaks if that checkout moves, violating the "Strict Installation Decoupling" rule in `CLAUDE.md`.
+**Date:** 2026-05-21 | **Status:** scoping | **Trigger:** the dev `osm` install points at the local checkout path and breaks if that checkout moves, violating the "Strict Installation Decoupling" rule in `CLAUDE.md`.
 
 ---
 
@@ -9,7 +9,7 @@
 | Model | How `osm` is installed | `PROJECT_ROOT` resolves to | Repo-independent? |
 |---|---|---|---|
 | **Production** (`install.sh`) | Clones repo to `~/.local/share/obsidian-semantic-mcp` (stable), symlinks `~/.local/bin/osm` → `…/scripts/osm`. `osm init` runs `uv sync` there. | `Path(__file__).parent` = the install dir, which *contains* `docker-compose.yml`. Self-contained. | **Yes** — independent of any dev checkout. |
-| **Dev** (`uv tool install --editable ~/DevOpsSec/…`) — *this machine* | Editable, tracks the dev repo. | `Path(__file__).parent` = `~/DevOpsSec/obsidian-semantic-mcp` (movable dev checkout). | **No** — this is the reported problem. |
+| **Dev** (`uv tool install --editable <local-checkout>/…`) — *this machine* | Editable, tracks the dev repo. | `Path(__file__).parent` = the local checkout path (movable dev checkout). | **No** — this is the reported problem. |
 
 The project already has a repo-independent path. The reported issue is that this machine is on the *dev* model, not the production one.
 
@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/m
 uv tool uninstall obsidian-semantic-mcp   # remove the editable dev tool first
 ```
 
-Result: `osm` runs from `~/.local/share/obsidian-semantic-mcp`; `~/DevOpsSec/obsidian-semantic-mcp` can be moved or deleted freely. Zero code change. This is the intended design.
+Result: `osm` runs from `~/.local/share/obsidian-semantic-mcp`; the local checkout path can be moved or deleted freely. Zero code change. This is the intended design.
 
 Caveat: `install.sh` clones from GitHub `main`. To install the current local code instead, run it against the local path or `git clone` the local repo into the install dir.
 
@@ -107,4 +107,4 @@ So PyPI is **not** a working install channel yet. Decision needed: (a) hold/disa
 ### Guardrails
 - Do not break `install.sh` (the co-located branch must catch it).
 - Do not change `launcher.py` (already correct; reuse its pattern).
-- This machine's migration: re-init the stack into the deploy dir, after which `~/DevOpsSec/obsidian-semantic-mcp` can move freely.
+- This machine's migration: re-init the stack into the deploy dir, after which the local checkout path can move freely.

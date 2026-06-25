@@ -2,7 +2,7 @@
 
 Project: `obsidian-semantic-mcp`
 Session: `c831e2e8-6878-4ac9-a8c5-2a2acc44c725`
-Logs: `~/Library/Caches/claude-cli-nodejs/-Users-airm2max-DevOpsSec-obsidian-semantic-mcp/mcp-logs-*/2026-04-30T15-55-03-569Z.jsonl`
+Logs: `~/Library/Caches/claude-cli-nodejs/<project-cache-dir>/mcp-logs-*/2026-04-30T15-55-03-569Z.jsonl`
 
 ## Summary
 
@@ -36,7 +36,7 @@ Two underlying issues account for all four failures.
 
 **Evidence (both serena and voice-toolkit):**
 ```
-pyenv: version `3.14' is not installed (set by /Users/airm2max/DevOpsSec/obsidian-semantic-mcp/.python-version)
+pyenv: version `3.14' is not installed (set by <project-root>/.python-version)
 pyenv: serena-mcp-server: command not found
 The `serena-mcp-server' command exists in these Python versions:
   3.11.6
@@ -50,7 +50,7 @@ The `serena-mcp-server' command exists in these Python versions:
 So pyenv reads `.python-version`, asks for 3.14, can't find it, and refuses to dispatch the command. This happens regardless of how the MCP server is registered, because Claude Code spawns it from the project directory.
 
 **Fixes (pick one):**
-1. Drop the project pin: `rm /Users/airm2max/DevOpsSec/obsidian-semantic-mcp/.python-version` (falls back to `system` or whatever global pin is in effect, then locates the shim under 3.11.6 if that's the active pyenv version).
+1. Drop the project pin: `rm <project-root>/.python-version` (falls back to `system` or whatever global pin is in effect, then locates the shim under 3.11.6 if that's the active pyenv version).
 2. Re-pin to a version that has the shims: `pyenv local 3.11.6`.
 3. Install Python 3.14 in pyenv: `pyenv install 3.14`, then re-install `serena-mcp-server` and `voice-toolkit` into that environment. Heavier; only do this if the project genuinely needs 3.14.
 

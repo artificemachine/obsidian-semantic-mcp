@@ -390,6 +390,6 @@ Fully containerized. Fully path-agnostic. No env vars required.
 ### Next session tasks
 
 1. Restore MCP config to containerized approach (interim: add `OSM_DOCKER=1` + `OSM_PROJECT_ROOT` back while v0.9.6 is being built)
-2. Restart mcp-server container: `docker compose --project-directory ~/DevOpsSec/obsidian-semantic-mcp up -d mcp-server`
+2. Restart mcp-server container: `docker compose up -d mcp-server`
 3. Implement v0.9.6: `osm init` writes config file, launcher reads it, Docker mode is default when config file exists
 4. Ship v0.9.6 and update MCP config to empty env block

@@ -9,10 +9,10 @@ arg to `docker compose exec`:
 $HOME/.claude.json (mcpServers.obsidian-semantic):
   command: "docker"
   args: ["compose", "--project-directory",
-         "/Users/airm2max/DevOpsSec/obsidian-semantic-mcp",
+         "<local-checkout>",
          "exec", "-T", "mcp-server", "python3", "/app/src/server.py"]
 
-$HOME/.opencode.json:5:  "command": "/Users/airm2max/DevOpsSec/obsidian-semantic-mcp/scripts/obsidian-semantic-mcp"
+$HOME/.opencode.json:5:  "command": "<local-checkout>/scripts/obsidian-semantic-mcp"
 $HOME/.pi/agent/mcp.json:35:  hardcoded project-directory
 ```
 
@@ -60,7 +60,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 # Must respond with initialize result within 30s
 
 # 2. Move repo, verify still works
-mv $HOME/DevOpsSec/obsidian-semantic-mcp $HOME/elsewhere/obsidian-semantic-mcp
+mv $HOME/elsewhere/obsidian-semantic-mcp $HOME/other/obsidian-semantic-mcp
 echo "$(pwd)/.." > $HOME/.config/obsidian-semantic-mcp/project_root
 echo '...initialize...' | obsidian-semantic-mcp
 # Must still respond
@@ -89,7 +89,7 @@ upstream) so the event loop isn't blocked between reads.
 
 ## Cross-cutting plan
 
-See `$HOME/DevOpsSec/superharness/docs/PLAN-portable-paths-cleanup.md` — this
+See the superharness docs (`PLAN-portable-paths-cleanup.md`) — this
 project is phase 2 of the cleanup.
 
 ## Memory aid for future Claude sessions
