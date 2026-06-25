@@ -353,3 +353,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 2026-05-21: fix(build): apply the same force-include copy-order fix to Dockerfile.dashboard. v0.12.1 fixed only the main Dockerfile, so the dashboard image build still failed with `Forced include not found: /app/docker-compose.yml`. Both images now build (verified locally for server + dashboard). (v0.12.2)
 
 - 2026-06-25: chore: remove personal workspace path from tracked files
+- 2026-06-25: chore: remove personal workspace path from tracked files
