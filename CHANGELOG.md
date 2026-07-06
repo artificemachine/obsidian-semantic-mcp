@@ -354,3 +354,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - 2026-06-25: chore: remove personal workspace path from tracked files
 - 2026-06-25: chore: remove personal workspace path from tracked files
+- 2026-07-06: feat: write_file now auto-injects mandatory frontmatter (aliases, tags, category, session, nas-path, related + created/updated) via _ensure_frontmatter; created is set once and never overwritten, updated always reflects the write, existing caller values and extra keys are preserved. Adds pyyaml dependency. (v0.13.0)
