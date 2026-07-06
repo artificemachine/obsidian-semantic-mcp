@@ -1379,3 +1379,87 @@ class TestExpandViaLinks:
         monkeypatch.setattr(server, "db_conn", fake)
         result = server.expand_via_links(["/vault/A.md"], hops=1)
         assert result == []
+
+
+# ── _ensure_frontmatter ───────────────────────────────────────────────────────
+
+class TestEnsureFrontmatter:
+    def test_no_existing_frontmatter_adds_all_required_keys(self):
+        import server
+        import yaml
+
+        result = server._ensure_frontmatter("Just a plain note body.\n")
+        assert result.startswith("---\n")
+        fm_end = result.find("\n---\n", 4)
+        fm = yaml.safe_load(result[4:fm_end])
+        for key in ("created", "updated", "aliases", "tags", "category", "session", "nas-path", "related"):
+            assert key in fm
+        assert fm["aliases"] == []
+        assert fm["related"] == []
+        assert "Just a plain note body." in result
+
+    def test_preserves_created_and_existing_values(self):
+        import server
+        import yaml
+        from datetime import date
+
+        existing = (
+            "---\n"
+            "perthor_synced: true\n"
+            "source: perthor/docs/audits/AUDIT-x.md\n"
+            "branch: maxime_dev\n"
+            "tags: [perthor, auto-synced]\n"
+            "category: Market Analysis\n"
+            "created: 2026-01-01\n"
+            "---\n"
+            "Body content here.\n"
+        )
+        result = server._ensure_frontmatter(existing)
+        fm_end = result.find("\n---\n", 4)
+        fm = yaml.safe_load(result[4:fm_end])
+
+        # created is preserved, not overwritten
+        assert fm["created"] == date(2026, 1, 1)
+        # already-set values are never silently replaced
+        assert fm["category"] == "Market Analysis"
+        assert fm["tags"] == ["perthor", "auto-synced"]
+        # project-specific extra keys survive untouched
+        assert fm["perthor_synced"] is True
+        assert fm["source"] == "perthor/docs/audits/AUDIT-x.md"
+        assert fm["branch"] == "maxime_dev"
+        # missing required keys get filled in with defaults
+        assert fm["aliases"] == []
+        assert fm["related"] == []
+        assert fm["session"] == ""
+        assert fm["nas-path"] == ""
+        assert "Body content here." in result
+
+    def test_updated_always_refreshes(self):
+        import server
+        import yaml
+        from datetime import date
+
+        existing = (
+            "---\n"
+            "created: 2026-01-01\n"
+            "updated: 2020-01-01\n"
+            "---\n"
+            "Body.\n"
+        )
+        result = server._ensure_frontmatter(existing)
+        fm_end = result.find("\n---\n", 4)
+        fm = yaml.safe_load(result[4:fm_end])
+        assert fm["updated"] == date.today()
+        assert fm["updated"] != date(2020, 1, 1)
+
+    def test_created_and_updated_are_unquoted_date_scalars(self):
+        """Obsidian's Properties panel only shows the date-picker UI for
+        real YAML date scalars, not quoted strings -- regression guard."""
+        import server
+
+        result = server._ensure_frontmatter("Body.\n")
+        fm_end = result.find("\n---\n", 4)
+        fm_block = result[4:fm_end]
+        for line in fm_block.splitlines():
+            if line.startswith("created:") or line.startswith("updated:"):
+                assert "'" not in line and '"' not in line

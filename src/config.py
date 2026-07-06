@@ -6,6 +6,20 @@ and cannot silently diverge.
 """
 import os
 
+# Mandatory frontmatter keys every note written via write_file must carry.
+# `None` means "no default value" -- the key still gets added, just empty
+# (list types) or left for the caller to fill in (string types). `created`
+# and `updated` are computed at write time (see server.py's
+# _ensure_frontmatter), not listed here.
+REQUIRED_FRONTMATTER_DEFAULTS: dict[str, object] = {
+    "aliases": [],
+    "tags": [],
+    "category": "",
+    "session": "",
+    "nas-path": "",
+    "related": [],
+}
+
 
 def build_dsn() -> str:
     """Build a psycopg2-compatible connection string from environment variables.

@@ -46,6 +46,7 @@ from typing import Any
 import psycopg2
 import psycopg2.pool
 import requests
+import yaml
 from mcp.server import Server
 import anyio
 from mcp.shared.message import SessionMessage
@@ -69,9 +70,9 @@ for _env_path in _ENV_SEARCH_PATHS:
         break
 
 try:
-    from .config import build_dsn  # installed as a package (uv tool / pip install)
+    from .config import build_dsn, REQUIRED_FRONTMATTER_DEFAULTS  # installed as a package (uv tool / pip install)
 except ImportError:
-    from config import build_dsn  # fallback: run directly from src/ during dev
+    from config import build_dsn, REQUIRED_FRONTMATTER_DEFAULTS  # fallback: run directly from src/ during dev
 
 
 # ─────────────────────────────────── Config ─────────────────────────────────
@@ -1040,6 +1041,36 @@ def _resolve_vault_path(relpath: str) -> Path:
     return resolved
 
 
+def _ensure_frontmatter(content: str) -> str:
+    """Guarantee every note written via write_file carries the mandatory
+    frontmatter keys (see REQUIRED_FRONTMATTER_DEFAULTS + created/updated).
+
+    `created` is set once and never overwritten. `updated` always reflects
+    this write. Every other required key is added only if missing -- an
+    already-present value (e.g. a caller-supplied `category`) is never
+    silently replaced. Any extra keys the caller already set (project-
+    specific fields) are preserved untouched.
+    """
+    today = datetime.now().date()
+
+    body = content
+    frontmatter: dict[str, object] = {}
+    if content.startswith("---\n"):
+        end = content.find("\n---", 4)
+        if end != -1:
+            raw_fm = content[4:end]
+            body = content[end + 4:].lstrip("\n")
+            frontmatter = yaml.safe_load(raw_fm) or {}
+
+    frontmatter.setdefault("created", today)
+    frontmatter["updated"] = today
+    for key, default in REQUIRED_FRONTMATTER_DEFAULTS.items():
+        frontmatter.setdefault(key, default)
+
+    dumped = yaml.safe_dump(frontmatter, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    return f"---\n{dumped}---\n\n{body}"
+
+
 def _relative(abspath: Path) -> str:
     """Return vault-relative path string. With multiple vaults, prefixes with vault basename."""
     vaults = _VAULT_LIST or ([VAULT_PATH] if VAULT_PATH else [])
@@ -1557,6 +1588,7 @@ async def call_tool(name: str, arguments: dict):
         try:
             filepath = arguments.get("filepath", "")
             content = arguments.get("content", "")
+            content = _ensure_frontmatter(content)
             target = _resolve_vault_path(filepath)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")

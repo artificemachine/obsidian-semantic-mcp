@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "obsidian-semantic-mcp"
-version = "0.12.2"
+version = "0.13.1"
 description = "Semantic search MCP server for Obsidian vaults"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -30,6 +30,7 @@ dependencies = [
     "pyjwt==2.12.1",
     "httpx==0.28.1",
     "python-dotenv==1.2.2",
+    "pyyaml==6.0.2",
 ]
 
 [dependency-groups]
