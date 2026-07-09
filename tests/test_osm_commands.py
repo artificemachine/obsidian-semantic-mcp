@@ -15,6 +15,7 @@ Coverage:
   - _prompt_vault_location (--vault / --vault-remote / interactive 1 or 2 / sshfs flows)
   - cmd_help
   - cmd_status (docker output / ollama / claude config states)
+  - cmd_vaults (single vault / missing path / multi-vault / unconfigured)
   - cmd_tunnel (success / failure / missing config / uses key from .env)
   - cmd_rebuild
   - cmd_remove (abort / dry-run / .env / claude config edge cases)
@@ -703,6 +704,45 @@ class TestCmdStatus:
 
         assert seen["reachable"] == ("localhost", 11434)
         assert seen["inference"] == ("http://localhost:11434", osm_init.EMBED_MODEL)
+
+
+# ── cmd_vaults ────────────────────────────────────────────────────────────────
+
+class TestCmdVaults:
+    def test_single_vault_existing_path(self, tmp_path, monkeypatch, capsys):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        monkeypatch.setattr(osm_init, "_read_env", lambda: {"OBSIDIAN_VAULT": str(vault)})
+        osm_init.cmd_vaults()
+        out = capsys.readouterr().out
+        assert str(vault) in out
+
+    def test_single_vault_missing_path(self, monkeypatch, capsys):
+        monkeypatch.setattr(osm_init, "_read_env", lambda: {"OBSIDIAN_VAULT": "/nope/gone"})
+        osm_init.cmd_vaults()
+        out = capsys.readouterr().out
+        assert "path not found" in out
+
+    def test_multi_vault_lists_all(self, tmp_path, monkeypatch, capsys):
+        v1 = tmp_path / "v1"
+        v2 = tmp_path / "v2"
+        v1.mkdir()
+        v2.mkdir()
+        monkeypatch.setattr(
+            osm_init,
+            "_read_env",
+            lambda: {"OBSIDIAN_VAULTS": f"{v1},{v2}", "OBSIDIAN_VAULT": str(v1)},
+        )
+        osm_init.cmd_vaults()
+        out = capsys.readouterr().out
+        assert str(v1) in out
+        assert str(v2) in out
+
+    def test_no_vault_configured_warns(self, monkeypatch, capsys):
+        monkeypatch.setattr(osm_init, "_read_env", lambda: {})
+        osm_init.cmd_vaults()
+        out = capsys.readouterr().out
+        assert "No vault configured" in out
 
 
 # ── cmd_tunnel ────────────────────────────────────────────────────────────────

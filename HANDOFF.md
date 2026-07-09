@@ -1,8 +1,22 @@
 # obsidian-semantic-mcp — Session Handoff
 
-**Latest update:** 2026-05-08 (PM) — Phase 2 portable-paths cleanup + stdin pipe-hang fix
-**Branch:** chore/portable-mcp-config (uncommitted)
-**Previous milestone:** v0.10.0 (PR #41, pi agent support, merged earlier 2026-05-08)
+**Latest update:** 2026-07-06 — v0.13.1 released: mandatory write_file frontmatter + de-gated live-Ollama smoke test
+**Branch:** main (PR #1 merged, c8600fc)
+**Previous milestone:** v0.12.2 (last tag before this session)
+
+---
+
+## 2026-07-06 session: write_file mandatory frontmatter, merged + released as v0.13.1
+
+- **`write_file` now auto-injects the mandatory 8-key vault frontmatter contract** (`created`, `updated`, `aliases`, `tags`, `category`, `session`, `nas-path`, `related`) via a new `_ensure_frontmatter()` in `src/server.py`, backed by `REQUIRED_FRONTMATTER_DEFAULTS` in `src/config.py`. `created` set once, never overwritten; `updated` always refreshed; existing caller values and extra keys preserved. Added `pyyaml` dependency. (0.13.0)
+- **De-gated `test_all_services_healthy`** (`tests/test_dashboard_smoke.py`) — it was failing every commit locally because `OLLAMA_URL` points at a Docker-Compose-internal hostname (`ollama`) that only resolves inside that network; any pytest run outside it always hit a `NameResolutionError`, an environment mismatch, not a code regression. Added `_is_unreachable_error()` to classify connection-level failures (DNS/refused/timeout) and skip instead of fail, plus 5 new offline unit tests (`TestUnreachableErrorClassification`). Full suite: 315 passed, 1 skipped, 0 failed — no `--no-verify` needed anymore. (0.13.1)
+- **PR #1 merged** (`c8600fc`, fast-forward, matches this repo's existing "Merge pull request #N" convention). Tagged and pushed `v0.13.1`. Created GitHub Release [v0.13.1](https://github.com/artificemachine/obsidian-semantic-mcp/releases/tag/v0.13.1).
+- **Local `uv tool install` updated** 0.12.2 → 0.13.1 (`osm`, `obsidian-semantic-mcp` both reinstalled and verified).
+
+### Deferred — explicitly left for later, not forgotten
+
+- **Docker Hub image build is broken and has *never* succeeded** — `docker-hub.yml` triggered for the first time ever on the `v0.13.1` tag push and failed immediately at the Docker Hub login step (`Username and password required`). Confirmed via `gh secret list`: **zero secrets are configured on this repo.** `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` (or whatever the workflow expects — check `docker-hub.yml`'s login step for the exact secret names) need to be added in repo settings before this will ever work. Not something an agent should fabricate — needs real Docker Hub credentials from the operator.
+- **PyPI publish never attempted** — `publish-pypi.yml` is `workflow_dispatch`-only by design (no PyPI Trusted Publisher registered yet, per its own comment). This package has never been published to PyPI (`pip index versions obsidian-semantic-mcp` → no matching distribution). Would be a first-ever public release; deliberately not triggered without explicit operator go-ahead given how hard a PyPI publish is to fully retract.
 
 ---
 
