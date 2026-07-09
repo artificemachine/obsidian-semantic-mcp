@@ -18,7 +18,7 @@ When using chat-based coding agents (Claude Code, Codex, OpenCode), ask for expl
 ### Install
 
 ```bash
-git clone https://github.com/celstnblacc/obsidian-semantic-mcp.git
+git clone https://github.com/artificemachine/obsidian-semantic-mcp.git
 cd obsidian-semantic-mcp
 uv sync
 ```

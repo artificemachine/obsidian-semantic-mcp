@@ -2,14 +2,14 @@
 # Obsidian Semantic MCP - one-liner installer for Windows
 #
 # Usage:
-#   powershell -c "irm https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.ps1 | iex"
+#   powershell -c "irm https://raw.githubusercontent.com/artificemachine/obsidian-semantic-mcp/main/install.ps1 | iex"
 #
 # Or with init flags passed through:
-#   powershell -c "iex (irm https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.ps1)" -- --mode 2 --vault C:\path\to\vault
+#   powershell -c "iex (irm https://raw.githubusercontent.com/artificemachine/obsidian-semantic-mcp/main/install.ps1)" -- --mode 2 --vault C:\path\to\vault
 
 $ErrorActionPreference = "Stop"
 
-$RepoUrl = "https://github.com/celstnblacc/obsidian-semantic-mcp.git"
+$RepoUrl = "https://github.com/artificemachine/obsidian-semantic-mcp.git"
 $DataHome = if ([string]::IsNullOrWhiteSpace($env:XDG_DATA_HOME)) {
     Join-Path $HOME ".local\share"
 } else {

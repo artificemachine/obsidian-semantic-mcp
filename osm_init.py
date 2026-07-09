@@ -2263,7 +2263,7 @@ def cmd_rebuild():
 
 # ── Version command ───────────────────────────────────────────────────────────
 
-_GITHUB_REPO = "celstnblacc/obsidian-semantic-mcp"
+_GITHUB_REPO = "artificemachine/obsidian-semantic-mcp"
 _LATEST_RELEASE_URL = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
 
 

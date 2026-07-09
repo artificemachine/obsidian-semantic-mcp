@@ -2,15 +2,15 @@
 # Obsidian Semantic MCP — one-liner installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/artificemachine/obsidian-semantic-mcp/main/install.sh | bash
 #
 # Or with init flags passed through:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.sh) \
+#   bash <(curl -fsSL https://raw.githubusercontent.com/artificemachine/obsidian-semantic-mcp/main/install.sh) \
 #       --mode 3 --vault /path/to/vault --persistent
 
 set -euo pipefail
 
-REPO_URL="https://github.com/celstnblacc/obsidian-semantic-mcp.git"
+REPO_URL="https://github.com/artificemachine/obsidian-semantic-mcp.git"
 INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/obsidian-semantic-mcp"
 BIN_DIR="$HOME/.local/bin"
 

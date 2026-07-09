@@ -49,14 +49,14 @@ uv run osm dashboard
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/artificemachine/obsidian-semantic-mcp/main/install.sh | bash
 ```
 
 > If `~/.local/share/obsidian-semantic-mcp` already exists, the installer updates that checkout before continuing. If that install directory has uncommitted local changes, the update step can abort with a Git merge error. In that case either commit/stash those changes there, or use your current checkout directly with `uv run osm init`.
 
 **Windows PowerShell:**
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/artificemachine/obsidian-semantic-mcp/main/install.ps1 | iex"
 ```
 
 > **Tip:** The bootstrap installer launches `osm init` for you. After a full install, you can run `osm init --dry-run` from an existing checkout to preview every action without making any changes.
@@ -547,7 +547,7 @@ Manual install only. Use this if you want to control every step yourself instead
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/celstnblacc/obsidian-semantic-mcp.git && cd obsidian-semantic-mcp
+git clone https://github.com/artificemachine/obsidian-semantic-mcp.git && cd obsidian-semantic-mcp
 uv sync
 ```
 

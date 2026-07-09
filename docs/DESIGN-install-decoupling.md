@@ -35,7 +35,7 @@ Switch from the dev install to the production install so `osm` lives in a stable
 
 ```bash
 # from a clean checkout or the installer
-curl -fsSL https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/artificemachine/obsidian-semantic-mcp/main/install.sh | bash
 # (or point INSTALL_DIR / clone source at the local repo)
 uv tool uninstall obsidian-semantic-mcp   # remove the editable dev tool first
 ```

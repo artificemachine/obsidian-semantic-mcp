@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "obsidian-semantic-mcp"
-version = "0.14.0"
+version = "0.14.1"
 description = "Semantic search MCP server for Obsidian vaults"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/celstnblacc/obsidian-semantic-mcp"
+repository = "https://github.com/artificemachine/obsidian-semantic-mcp"
 keywords = ["obsidian", "mcp", "semantic-search", "pgvector", "ollama", "claude"]
 classifiers = [
     "Intended Audience :: End Users/Desktop",
