@@ -7,11 +7,11 @@ Quick reference for diagnosing and resolving incidents with Obsidian Semantic MC
 If the `osm` launcher is missing or stale, rerun the bootstrap installer for your platform:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/artificemachine/obsidian-semantic-mcp/main/install.sh | bash
 ```
 
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/celstnblacc/obsidian-semantic-mcp/main/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/artificemachine/obsidian-semantic-mcp/main/install.ps1 | iex"
 ```
 
 The bootstrap creates a platform-appropriate launcher in `~/.local/bin/`:
