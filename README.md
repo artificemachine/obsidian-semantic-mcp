@@ -232,6 +232,7 @@ Use `osm` to set up, manage, and tear down the stack. The wizard installs all pr
 | `osm init --mode <1-4> --vault <path>` | Non-interactive setup (agent/script friendly) |
 | `osm init --dry-run` | Preview all actions without making any changes |
 | `osm status` | Check service health (Docker, Ollama reachability/inference, Claude Desktop) |
+| `osm vaults` | List configured Obsidian vault(s) |
 | `osm dashboard` | Open monitoring dashboard in browser |
 | `osm rebuild` | Rebuild Docker images after a code change |
 | `osm tunnel` | Reconnect SSH tunnel (remote Ollama mode) |

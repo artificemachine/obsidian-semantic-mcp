@@ -2162,6 +2162,34 @@ def cmd_tunnel():
         sys.exit(1)
 
 
+# ── Vaults command ────────────────────────────────────────────────────────────
+
+
+def cmd_vaults():
+    """List the Obsidian vault(s) this install is indexing."""
+    header("OSM Vaults")
+    hr()
+
+    env = _read_env()
+    raw_multi = env.get("OBSIDIAN_VAULTS", "")
+    vaults = [v.strip() for v in raw_multi.split(",") if v.strip()]
+    if not vaults:
+        single = env.get("OBSIDIAN_VAULT", "")
+        if single:
+            vaults = [single]
+
+    if not vaults:
+        warn("No vault configured — run osm init")
+        return
+
+    for v in vaults:
+        p = Path(v)
+        if p.exists():
+            ok(v)
+        else:
+            fail(f"{v}  (path not found)")
+
+
 # ── Status command ────────────────────────────────────────────────────────────
 
 
@@ -2652,6 +2680,7 @@ def cmd_help():
     print(f"        --ssh-host 203.0.113.5 --ssh-user ubuntu \\")
     print(f"        --ssh-key $HOME/.ssh/id_ed25519         # Remote Ollama via SSH")
     print(f"    osm status                                  # Check service health")
+    print(f"    osm vaults                                  # List configured vault(s)")
     print(f"    osm tunnel                                  # Reconnect SSH tunnel")
     print(f"    osm rebuild                                 # Rebuild Docker images")
     print(f"    osm update                                  # Pull latest images and restart")
@@ -2667,6 +2696,7 @@ def cmd_help():
 COMMANDS = {
     "init": (cmd_init, "Interactive setup wizard"),
     "status": (cmd_status, "Check service health"),
+    "vaults": (cmd_vaults, "List configured Obsidian vault(s)"),
     "dashboard": (cmd_dashboard, "Open monitoring dashboard in browser"),
     "tunnel": (cmd_tunnel, "Reconnect SSH tunnel to remote Ollama host"),
     "rebuild": (cmd_rebuild, "Rebuild Docker images and restart"),
