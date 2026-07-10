@@ -268,6 +268,9 @@ def init_db(embed_dim: int = 768) -> None:
         with conn:
             with conn.cursor() as cur:
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+                # embed_dim is an int from the embedding model config, never request
+                # input, and pgvector's vector(N) type doesn't accept a %s parameter
+                # for its dimension — DDL, not a SQLi vector.
                 cur.execute(f"""
                     CREATE TABLE IF NOT EXISTS notes (
                         id          SERIAL PRIMARY KEY,
@@ -1353,7 +1356,9 @@ async def call_tool(name: str, arguments: dict):
             # When re-ranking is enabled, fetch a wider candidate pool first
             fetch_limit = max(limit, RERANK_CANDIDATES) if RERANK_MODEL else limit
 
-            # Build optional vault filter clause
+            # Build optional vault filter clause. vault_clause is always one of these
+            # two hardcoded literals (never request input) — every real value in the
+            # three queries below is %s-parameterized. Not a SQLi vector.
             vault_clause = "AND vault_id = ANY(%s)" if vault_ids else ""
             vault_param  = (vault_ids,) if vault_ids else ()
 
