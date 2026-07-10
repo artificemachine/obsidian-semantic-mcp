@@ -2253,10 +2253,48 @@ def cmd_status():
 # ── Rebuild command ───────────────────────────────────────────────────────────
 
 
+def _compose_image_name(service: str) -> str | None:
+    """Extract the `image:` repo name for a service from docker-compose.yml
+    (e.g. "celestinmax/obsidian-semantic-mcp"), stripping the ${OSM_VERSION:-latest}
+    tag expression. Returns None if the service or its image line isn't found."""
+    import re
+
+    compose_path = PROJECT_ROOT / "docker-compose.yml"
+    if not compose_path.exists():
+        return None
+    text = compose_path.read_text()
+    m = re.search(rf"^  {re.escape(service)}:\n(?:.*\n)*?    image: ([^\s:]+):", text, re.MULTILINE)
+    return m.group(1) if m else None
+
+
 def cmd_rebuild():
     header("Rebuilding Docker images")
     hr()
-    compose(["up", "-d", "--build", "mcp-server", "dashboard"])
+
+    dockerfile = PROJECT_ROOT / "Dockerfile"
+    dockerfile_dashboard = PROJECT_ROOT / "Dockerfile.dashboard"
+
+    if dockerfile.exists() and dockerfile_dashboard.exists():
+        mcp_repo = _compose_image_name("mcp-server")
+        dashboard_repo = _compose_image_name("dashboard")
+        if not mcp_repo or not dashboard_repo:
+            warn("Could not resolve image names from docker-compose.yml — falling back to compose --build")
+            compose(["up", "-d", "--build", "mcp-server", "dashboard"])
+        else:
+            tag = _read_env().get("OSM_VERSION") or "latest"
+            mcp_image = f"{mcp_repo}:{tag}"
+            dashboard_image = f"{dashboard_repo}:{tag}"
+            info(f"Building from local source ({PROJECT_ROOT}) — tag {tag}")
+            run(["docker", "build", "-f", str(dockerfile), "-t", mcp_image, str(PROJECT_ROOT)])
+            run(["docker", "build", "-f", str(dockerfile_dashboard), "-t", dashboard_image, str(PROJECT_ROOT)])
+            # Images now match the tag docker-compose.yml resolves to, so a plain
+            # `up -d` uses them as-is (Compose's default pull policy only pulls
+            # when the tag is missing locally) — no risk of clobbering with a stale pull.
+            compose(["up", "-d", "mcp-server", "dashboard"])
+    else:
+        warn("No local Dockerfile found — recreating from the already-pulled image, not a source rebuild")
+        compose(["up", "-d", "--build", "mcp-server", "dashboard"])
+
     ok("Rebuild complete")
     info("Dashboard:  http://localhost:8484")
 
