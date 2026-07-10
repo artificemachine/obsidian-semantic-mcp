@@ -99,6 +99,8 @@ def search_notes(
     with db_conn() as conn:
         with conn.cursor() as cur:
             if mode == "keyword":
+                # vault_clause is one of two hardcoded literals (never request input);
+                # every real value below is %s-parameterized. Not a SQLi vector.
                 cur.execute(f"""
                     SELECT path, content,
                            ts_rank(content_tsv, plainto_tsquery('english', %s)) AS similarity
@@ -111,6 +113,8 @@ def search_notes(
             else:
                 assert vec_str is not None
                 if mode == "semantic":
+                    # vault_clause is one of two hardcoded literals (never request input);
+                    # every real value below is %s-parameterized. Not a SQLi vector.
                     cur.execute(f"""
                         SELECT path, content,
                                1 - (embedding <=> %s::vector) AS similarity
@@ -121,6 +125,8 @@ def search_notes(
                         LIMIT %s
                     """, (vec_str, vec_str, min_similarity) + vault_param + (vec_str, limit))
                 else:  # hybrid
+                    # vault_clause is one of two hardcoded literals (never request input);
+                    # every real value below is %s-parameterized. Not a SQLi vector.
                     cur.execute(f"""
                         SELECT path, content,
                                (1 - (embedding <=> %s::vector)) * 0.7 +
