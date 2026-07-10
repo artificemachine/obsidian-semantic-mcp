@@ -17,7 +17,8 @@ Coverage:
   - cmd_status (docker output / ollama / claude config states)
   - cmd_vaults (single vault / missing path / multi-vault / unconfigured)
   - cmd_tunnel (success / failure / missing config / uses key from .env)
-  - cmd_rebuild
+  - cmd_rebuild (source-build when Dockerfile present / compose --build fallback / OSM_VERSION tag resolution)
+  - _compose_image_name (extracts image repo name from docker-compose.yml)
   - cmd_remove (abort / dry-run / .env / claude config edge cases)
   - cmd_init (macOS modes 1-4 / Linux modes 1-3 / unsupported platform)
   - mode_full_docker (happy path / docker fail / ollama URL / pgdata forwarding)
@@ -812,20 +813,85 @@ class TestCmdTunnel:
 
 # ── cmd_rebuild ───────────────────────────────────────────────────────────────
 
+_COMPOSE_YML_FIXTURE = (
+    "services:\n"
+    "  mcp-server:\n"
+    "    image: celestinmax/obsidian-semantic-mcp:${OSM_VERSION:-latest}\n"
+    "  dashboard:\n"
+    "    image: celestinmax/obsidian-semantic-dashboard:${OSM_VERSION:-latest}\n"
+)
+
+
 class TestCmdRebuild:
-    def test_calls_compose_with_build(self, monkeypatch):
+    def test_no_dockerfile_falls_back_to_compose_build(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
         calls = []
         monkeypatch.setattr(osm_init, "compose", lambda args, **kw: calls.append(args))
         osm_init.cmd_rebuild()
         assert calls
         assert "--build" in calls[0]
+        assert "mcp-server" in calls[0]
+        assert "dashboard" in calls[0]
 
-    def test_rebuilds_mcp_server_and_dashboard(self, monkeypatch):
+    def test_builds_from_local_source_when_dockerfile_present(self, tmp_path, monkeypatch):
+        (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+        (tmp_path / "Dockerfile.dashboard").write_text("FROM scratch\n")
+        (tmp_path / "docker-compose.yml").write_text(_COMPOSE_YML_FIXTURE)
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(osm_init, "_read_env", lambda: {"OSM_VERSION": "0.14.1"})
+        build_calls = []
+        monkeypatch.setattr(osm_init, "run", lambda cmd, **kw: build_calls.append(cmd))
+        compose_calls = []
+        monkeypatch.setattr(osm_init, "compose", lambda args, **kw: compose_calls.append(args))
+
+        osm_init.cmd_rebuild()
+
+        assert len(build_calls) == 2
+        assert build_calls[0][:2] == ["docker", "build"]
+        assert "celestinmax/obsidian-semantic-mcp:0.14.1" in build_calls[0]
+        assert "celestinmax/obsidian-semantic-dashboard:0.14.1" in build_calls[1]
+        assert compose_calls == [["up", "-d", "mcp-server", "dashboard"]]
+
+    def test_no_osm_version_defaults_to_latest_tag(self, tmp_path, monkeypatch):
+        (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+        (tmp_path / "Dockerfile.dashboard").write_text("FROM scratch\n")
+        (tmp_path / "docker-compose.yml").write_text(_COMPOSE_YML_FIXTURE)
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(osm_init, "_read_env", lambda: {})
+        build_calls = []
+        monkeypatch.setattr(osm_init, "run", lambda cmd, **kw: build_calls.append(cmd))
+        monkeypatch.setattr(osm_init, "compose", lambda args, **kw: None)
+
+        osm_init.cmd_rebuild()
+
+        assert "celestinmax/obsidian-semantic-mcp:latest" in build_calls[0]
+
+    def test_unresolvable_image_name_falls_back_to_compose_build(self, tmp_path, monkeypatch):
+        (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+        (tmp_path / "Dockerfile.dashboard").write_text("FROM scratch\n")
+        (tmp_path / "docker-compose.yml").write_text("services:\n  other:\n    image: foo:bar\n")
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
         calls = []
         monkeypatch.setattr(osm_init, "compose", lambda args, **kw: calls.append(args))
         osm_init.cmd_rebuild()
-        assert "mcp-server" in calls[0]
-        assert "dashboard" in calls[0]
+        assert "--build" in calls[0]
+
+
+class TestComposeImageName:
+    def test_extracts_repo_name(self, tmp_path, monkeypatch):
+        (tmp_path / "docker-compose.yml").write_text(_COMPOSE_YML_FIXTURE)
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        assert osm_init._compose_image_name("mcp-server") == "celestinmax/obsidian-semantic-mcp"
+        assert osm_init._compose_image_name("dashboard") == "celestinmax/obsidian-semantic-dashboard"
+
+    def test_missing_service_returns_none(self, tmp_path, monkeypatch):
+        (tmp_path / "docker-compose.yml").write_text(_COMPOSE_YML_FIXTURE)
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        assert osm_init._compose_image_name("nope") is None
+
+    def test_missing_compose_file_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        assert osm_init._compose_image_name("mcp-server") is None
 
 
 # ── cmd_update ────────────────────────────────────────────────────────────────
