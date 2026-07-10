@@ -17,8 +17,10 @@ Coverage:
   - cmd_status (docker output / ollama / claude config states)
   - cmd_vaults (single vault / missing path / multi-vault / unconfigured)
   - cmd_tunnel (success / failure / missing config / uses key from .env)
-  - cmd_rebuild (source-build when Dockerfile present / compose --build fallback / OSM_VERSION tag resolution)
+  - cmd_rebuild (source-build when Dockerfile present / compose --build fallback / OSM_VERSION persisted)
+  - cmd_update (image-service pull / source-build-with-pull-base / compose --build fallback / call order)
   - _compose_image_name (extracts image repo name from docker-compose.yml)
+  - _update_env_var (append / replace-in-place / create / dry-run)
   - cmd_remove (abort / dry-run / .env / claude config edge cases)
   - cmd_init (macOS modes 1-4 / Linux modes 1-3 / unsupported platform)
   - mode_full_docker (happy path / docker fail / ollama URL / pgdata forwarding)
@@ -838,7 +840,6 @@ class TestCmdRebuild:
         (tmp_path / "Dockerfile.dashboard").write_text("FROM scratch\n")
         (tmp_path / "docker-compose.yml").write_text(_COMPOSE_YML_FIXTURE)
         monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
-        monkeypatch.setattr(osm_init, "_read_env", lambda: {"OSM_VERSION": "0.14.1"})
         build_calls = []
         monkeypatch.setattr(osm_init, "run", lambda cmd, **kw: build_calls.append(cmd))
         compose_calls = []
@@ -848,23 +849,24 @@ class TestCmdRebuild:
 
         assert len(build_calls) == 2
         assert build_calls[0][:2] == ["docker", "build"]
-        assert "celestinmax/obsidian-semantic-mcp:0.14.1" in build_calls[0]
-        assert "celestinmax/obsidian-semantic-dashboard:0.14.1" in build_calls[1]
+        assert f"celestinmax/obsidian-semantic-mcp:{osm_init.APP_VERSION}" in build_calls[0]
+        assert f"celestinmax/obsidian-semantic-dashboard:{osm_init.APP_VERSION}" in build_calls[1]
         assert compose_calls == [["up", "-d", "mcp-server", "dashboard"]]
 
-    def test_no_osm_version_defaults_to_latest_tag(self, tmp_path, monkeypatch):
+    def test_persists_osm_version_to_env_when_building_from_source(self, tmp_path, monkeypatch):
         (tmp_path / "Dockerfile").write_text("FROM scratch\n")
         (tmp_path / "Dockerfile.dashboard").write_text("FROM scratch\n")
         (tmp_path / "docker-compose.yml").write_text(_COMPOSE_YML_FIXTURE)
+        (tmp_path / ".env").write_text("POSTGRES_PASSWORD=secret\nOSM_VERSION=0.12.2\n")
         monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
-        monkeypatch.setattr(osm_init, "_read_env", lambda: {})
-        build_calls = []
-        monkeypatch.setattr(osm_init, "run", lambda cmd, **kw: build_calls.append(cmd))
+        monkeypatch.setattr(osm_init, "run", lambda cmd, **kw: None)
         monkeypatch.setattr(osm_init, "compose", lambda args, **kw: None)
 
         osm_init.cmd_rebuild()
 
-        assert "celestinmax/obsidian-semantic-mcp:latest" in build_calls[0]
+        env_text = (tmp_path / ".env").read_text()
+        assert f"OSM_VERSION={osm_init.APP_VERSION}" in env_text
+        assert "POSTGRES_PASSWORD=secret" in env_text
 
     def test_unresolvable_image_name_falls_back_to_compose_build(self, tmp_path, monkeypatch):
         (tmp_path / "Dockerfile").write_text("FROM scratch\n")
@@ -894,53 +896,97 @@ class TestComposeImageName:
         assert osm_init._compose_image_name("mcp-server") is None
 
 
+class TestUpdateEnvVar:
+    def test_appends_when_key_absent(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        (tmp_path / ".env").write_text("POSTGRES_PASSWORD=secret\n")
+        osm_init._update_env_var("OSM_VERSION", "0.14.2")
+        text = (tmp_path / ".env").read_text()
+        assert "POSTGRES_PASSWORD=secret" in text
+        assert "OSM_VERSION=0.14.2" in text
+
+    def test_replaces_existing_key_in_place(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        (tmp_path / ".env").write_text("OSM_VERSION=0.12.2\nPOSTGRES_PASSWORD=secret\n")
+        osm_init._update_env_var("OSM_VERSION", "0.14.2")
+        lines = (tmp_path / ".env").read_text().splitlines()
+        assert lines.count("OSM_VERSION=0.14.2") == 1
+        assert "OSM_VERSION=0.12.2" not in lines
+        assert "POSTGRES_PASSWORD=secret" in lines
+
+    def test_creates_env_when_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        osm_init._update_env_var("OSM_VERSION", "0.14.2")
+        assert (tmp_path / ".env").read_text().strip() == "OSM_VERSION=0.14.2"
+
+    def test_dry_run_does_not_write(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(osm_init, "DRY_RUN", True)
+        osm_init._update_env_var("OSM_VERSION", "0.14.2")
+        assert not (tmp_path / ".env").exists()
+
+
 # ── cmd_update ────────────────────────────────────────────────────────────────
 
 class TestCmdUpdate:
-    def _capture(self, monkeypatch):
+    def _capture(self, monkeypatch, project_root):
         calls = []
         monkeypatch.setattr(osm_init, "compose", lambda args, **kw: calls.append(args))
         monkeypatch.setattr(osm_init, "_fetch_latest_release_tag", lambda: None)
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", project_root)
         return calls
 
-    def test_pulls_image_based_services_explicitly(self, monkeypatch):
-        calls = self._capture(monkeypatch)
+    def test_pulls_image_based_services_explicitly(self, tmp_path, monkeypatch):
+        calls = self._capture(monkeypatch, tmp_path)
         osm_init.cmd_update()
         pull = next((c for c in calls if c and c[0] == "pull"), None)
         assert pull is not None
         assert "postgres" in pull
         assert "ollama" in pull
-        # Must not try to pull build-only services — that would fail on older
-        # compose versions that error on services without an `image:` field.
         assert "mcp-server" not in pull
         assert "dashboard" not in pull
 
-    def test_rebuilds_custom_services_with_pull(self, monkeypatch):
-        calls = self._capture(monkeypatch)
-        osm_init.cmd_update()
-        build = next((c for c in calls if c and c[0] == "build"), None)
-        assert build is not None
-        assert "--pull" in build
-        assert "mcp-server" in build
-        assert "dashboard" in build
-
-    def test_restarts_only_custom_services(self, monkeypatch):
-        calls = self._capture(monkeypatch)
+    def test_no_dockerfile_falls_back_to_compose_build_up(self, tmp_path, monkeypatch):
+        calls = self._capture(monkeypatch, tmp_path)
         osm_init.cmd_update()
         up = next((c for c in calls if c and c[0] == "up"), None)
         assert up is not None
-        assert "-d" in up
+        assert "--build" in up
         assert "mcp-server" in up
         assert "dashboard" in up
         # Must not restart postgres/ollama — unnecessary downtime.
         assert "postgres" not in up
         assert "ollama" not in up
 
-    def test_call_order_pull_then_build_then_up(self, monkeypatch):
-        calls = self._capture(monkeypatch)
+    def test_call_order_pull_then_up(self, tmp_path, monkeypatch):
+        calls = self._capture(monkeypatch, tmp_path)
         osm_init.cmd_update()
         verbs = [c[0] for c in calls if c]
-        assert verbs.index("pull") < verbs.index("build") < verbs.index("up")
+        assert verbs.index("pull") < verbs.index("up")
+
+    def test_builds_from_source_with_pull_base_when_dockerfile_present(self, tmp_path, monkeypatch):
+        (tmp_path / "Dockerfile").write_text("FROM scratch\n")
+        (tmp_path / "Dockerfile.dashboard").write_text("FROM scratch\n")
+        (tmp_path / "docker-compose.yml").write_text(_COMPOSE_YML_FIXTURE)
+        calls = self._capture(monkeypatch, tmp_path)
+        build_calls = []
+        real_run = osm_init.run
+
+        def _capture_run(cmd, **kw):
+            if cmd[:2] == ["docker", "build"]:
+                build_calls.append(cmd)
+                return _cp(0)
+            return real_run(cmd, **kw)
+
+        monkeypatch.setattr(osm_init, "run", _capture_run)
+
+        osm_init.cmd_update()
+
+        assert len(build_calls) == 2
+        assert "--pull" in build_calls[0]
+        assert f"celestinmax/obsidian-semantic-mcp:{osm_init.APP_VERSION}" in build_calls[0]
+        up = next((c for c in calls if c and c[0] == "up"), None)
+        assert up == ["up", "-d", "mcp-server", "dashboard"]
 
 
 # ── cmd_remove ────────────────────────────────────────────────────────────────

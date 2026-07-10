@@ -2135,6 +2135,30 @@ def _read_env():
     return result
 
 
+def _update_env_var(key: str, value: str) -> None:
+    """Update or append a single KEY=VALUE line in .env, preserving every
+    other line and the 0o600 permission (the file holds POSTGRES_PASSWORD)."""
+    env_path = PROJECT_ROOT / ".env"
+    if DRY_RUN:
+        _dry(f"update {env_path}", f"{key}={value}")
+        return
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if (
+            stripped
+            and not stripped.startswith("#")
+            and "=" in stripped
+            and stripped.split("=", 1)[0].strip() == key
+        ):
+            lines[i] = f"{key}={value}"
+            break
+    else:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n")
+    env_path.chmod(0o600)
+
+
 def cmd_tunnel():
     """Re-open the SSH tunnel using credentials stored in .env."""
     header("OSM Tunnel — reconnect SSH tunnel")
@@ -2267,34 +2291,49 @@ def _compose_image_name(service: str) -> str | None:
     return m.group(1) if m else None
 
 
-def cmd_rebuild():
-    header("Rebuilding Docker images")
-    hr()
+def _build_or_pull_custom_services(pull_base: bool = False) -> None:
+    """Refresh mcp-server/dashboard. If a local source checkout is present
+    (Dockerfile + Dockerfile.dashboard at PROJECT_ROOT), build directly with
+    `docker build` and persist OSM_VERSION=APP_VERSION to .env so the tag
+    docker-compose.yml resolves (${OSM_VERSION:-latest}) matches what was
+    just built — a plain `compose up -d` then uses it as-is instead of
+    attempting a pull. With no local Dockerfile (pip-only/packaged installs,
+    which never have a build context to build from), falls back to the
+    pull-based compose flow.
 
+    pull_base=True passes --pull to `docker build` so the base image layer
+    is refreshed too (used by `osm update`, which is expected to fetch
+    upstream changes, not just retag the same base).
+    """
     dockerfile = PROJECT_ROOT / "Dockerfile"
     dockerfile_dashboard = PROJECT_ROOT / "Dockerfile.dashboard"
 
     if dockerfile.exists() and dockerfile_dashboard.exists():
         mcp_repo = _compose_image_name("mcp-server")
         dashboard_repo = _compose_image_name("dashboard")
-        if not mcp_repo or not dashboard_repo:
-            warn("Could not resolve image names from docker-compose.yml — falling back to compose --build")
-            compose(["up", "-d", "--build", "mcp-server", "dashboard"])
-        else:
-            tag = _read_env().get("OSM_VERSION") or "latest"
-            mcp_image = f"{mcp_repo}:{tag}"
-            dashboard_image = f"{dashboard_repo}:{tag}"
-            info(f"Building from local source ({PROJECT_ROOT}) — tag {tag}")
-            run(["docker", "build", "-f", str(dockerfile), "-t", mcp_image, str(PROJECT_ROOT)])
-            run(["docker", "build", "-f", str(dockerfile_dashboard), "-t", dashboard_image, str(PROJECT_ROOT)])
+        if mcp_repo and dashboard_repo:
+            _update_env_var("OSM_VERSION", APP_VERSION)
+            mcp_image = f"{mcp_repo}:{APP_VERSION}"
+            dashboard_image = f"{dashboard_repo}:{APP_VERSION}"
+            info(f"Building from local source ({PROJECT_ROOT}) — tag {APP_VERSION}")
+            build_prefix = ["docker", "build"] + (["--pull"] if pull_base else [])
+            run(build_prefix + ["-f", str(dockerfile), "-t", mcp_image, str(PROJECT_ROOT)])
+            run(build_prefix + ["-f", str(dockerfile_dashboard), "-t", dashboard_image, str(PROJECT_ROOT)])
             # Images now match the tag docker-compose.yml resolves to, so a plain
             # `up -d` uses them as-is (Compose's default pull policy only pulls
             # when the tag is missing locally) — no risk of clobbering with a stale pull.
             compose(["up", "-d", "mcp-server", "dashboard"])
-    else:
-        warn("No local Dockerfile found — recreating from the already-pulled image, not a source rebuild")
-        compose(["up", "-d", "--build", "mcp-server", "dashboard"])
+            return
+        warn("Could not resolve image names from docker-compose.yml — falling back to compose --build")
 
+    warn("No local Dockerfile found — recreating from the already-pulled image, not a source rebuild")
+    compose(["up", "-d", "--build", "mcp-server", "dashboard"])
+
+
+def cmd_rebuild():
+    header("Rebuilding Docker images")
+    hr()
+    _build_or_pull_custom_services()
     ok("Rebuild complete")
     info("Dashboard:  http://localhost:8484")
 
@@ -2357,22 +2396,16 @@ def cmd_update():
     else:
         warn("Could not reach GitHub to check for latest release")
 
-    # The default compose config builds mcp-server and dashboard from local
-    # source (build: .) — `compose pull` is a no-op on those services. To
-    # update all services regardless of whether they use `image:` or `build:`:
-    #   1. `pull` refreshes image-based services (postgres, ollama).
-    #   2. `build --pull` refreshes the base image of build-based services
-    #      and rebuilds them against the current source tree.
-    # Docker compose silently skips each step for services it does not apply
-    # to, so a single invocation covers both install shapes.
+    # mcp-server/dashboard only declare `image:` in docker-compose.yml (no
+    # `build:` context) — `compose pull`/`compose build` are no-ops on them.
+    # _build_or_pull_custom_services builds directly from source when a
+    # local checkout is present (source installs), else falls back to
+    # recreating from whatever's already pulled (pip-only/packaged installs).
     info("Pulling latest images for image-based services (postgres, ollama)…")
     compose(["pull", "postgres", "ollama"])
 
     info("Rebuilding custom services from source with refreshed base images…")
-    compose(["build", "--pull", "mcp-server", "dashboard"])
-
-    info("Restarting services…")
-    compose(["up", "-d", "mcp-server", "dashboard"])
+    _build_or_pull_custom_services(pull_base=True)
 
     ok("Docker services updated")
     print()
