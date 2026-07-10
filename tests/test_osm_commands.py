@@ -818,9 +818,9 @@ class TestCmdTunnel:
 _COMPOSE_YML_FIXTURE = (
     "services:\n"
     "  mcp-server:\n"
-    "    image: celestinmax/obsidian-semantic-mcp:${OSM_VERSION:-latest}\n"
+    "    image: newblacc/obsidian-semantic-mcp:${OSM_VERSION:-latest}\n"
     "  dashboard:\n"
-    "    image: celestinmax/obsidian-semantic-dashboard:${OSM_VERSION:-latest}\n"
+    "    image: newblacc/obsidian-semantic-dashboard:${OSM_VERSION:-latest}\n"
 )
 
 
@@ -849,8 +849,8 @@ class TestCmdRebuild:
 
         assert len(build_calls) == 2
         assert build_calls[0][:2] == ["docker", "build"]
-        assert f"celestinmax/obsidian-semantic-mcp:{osm_init.APP_VERSION}" in build_calls[0]
-        assert f"celestinmax/obsidian-semantic-dashboard:{osm_init.APP_VERSION}" in build_calls[1]
+        assert f"newblacc/obsidian-semantic-mcp:{osm_init.APP_VERSION}" in build_calls[0]
+        assert f"newblacc/obsidian-semantic-dashboard:{osm_init.APP_VERSION}" in build_calls[1]
         assert compose_calls == [["up", "-d", "mcp-server", "dashboard"]]
 
     def test_persists_osm_version_to_env_when_building_from_source(self, tmp_path, monkeypatch):
@@ -883,8 +883,8 @@ class TestComposeImageName:
     def test_extracts_repo_name(self, tmp_path, monkeypatch):
         (tmp_path / "docker-compose.yml").write_text(_COMPOSE_YML_FIXTURE)
         monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
-        assert osm_init._compose_image_name("mcp-server") == "celestinmax/obsidian-semantic-mcp"
-        assert osm_init._compose_image_name("dashboard") == "celestinmax/obsidian-semantic-dashboard"
+        assert osm_init._compose_image_name("mcp-server") == "newblacc/obsidian-semantic-mcp"
+        assert osm_init._compose_image_name("dashboard") == "newblacc/obsidian-semantic-dashboard"
 
     def test_missing_service_returns_none(self, tmp_path, monkeypatch):
         (tmp_path / "docker-compose.yml").write_text(_COMPOSE_YML_FIXTURE)
@@ -984,7 +984,7 @@ class TestCmdUpdate:
 
         assert len(build_calls) == 2
         assert "--pull" in build_calls[0]
-        assert f"celestinmax/obsidian-semantic-mcp:{osm_init.APP_VERSION}" in build_calls[0]
+        assert f"newblacc/obsidian-semantic-mcp:{osm_init.APP_VERSION}" in build_calls[0]
         up = next((c for c in calls if c and c[0] == "up"), None)
         assert up == ["up", "-d", "mcp-server", "dashboard"]
 

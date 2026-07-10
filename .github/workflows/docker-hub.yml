@@ -37,7 +37,7 @@ jobs:
         id: meta-server
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/obsidian-semantic-mcp
+          images: newblacc/obsidian-semantic-mcp
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -58,7 +58,7 @@ jobs:
         id: meta-dashboard
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/obsidian-semantic-dashboard
+          images: newblacc/obsidian-semantic-dashboard
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
