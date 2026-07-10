@@ -2279,7 +2279,7 @@ def cmd_status():
 
 def _compose_image_name(service: str) -> str | None:
     """Extract the `image:` repo name for a service from docker-compose.yml
-    (e.g. "celestinmax/obsidian-semantic-mcp"), stripping the ${OSM_VERSION:-latest}
+    (e.g. "newblacc/obsidian-semantic-mcp"), stripping the ${OSM_VERSION:-latest}
     tag expression. Returns None if the service or its image line isn't found."""
     import re
 

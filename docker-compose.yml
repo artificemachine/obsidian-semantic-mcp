@@ -74,7 +74,7 @@ services:
     networks: [obsidian-internal]
 
   mcp-server:
-    image: celestinmax/obsidian-semantic-mcp:${OSM_VERSION:-latest}
+    image: newblacc/obsidian-semantic-mcp:${OSM_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -116,7 +116,7 @@ services:
     networks: [obsidian-internal]
 
   dashboard:
-    image: celestinmax/obsidian-semantic-dashboard:${OSM_VERSION:-latest}
+    image: newblacc/obsidian-semantic-dashboard:${OSM_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       postgres:
