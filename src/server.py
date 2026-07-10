@@ -22,7 +22,10 @@ Environment variables:
   POSTGRES_PASSWORD postgres password           (default: empty)
   OLLAMA_URL        ollama API endpoint         (default: http://localhost:11434)
   EMBEDDING_MODEL   ollama model name           (default: nomic-embed-text)
-  EMBED_TIMEOUT     seconds before embed request times out (default: 15)
+  EMBED_TIMEOUT     seconds before embed request times out (default: 30)
+  EMBED_WORKERS     parallel embedding threads  (default: 1 — CPU-only Ollama
+                    serves one request at a time; raise only if Ollama has
+                    GPU/multi-slot capacity to match)
 """
 from __future__ import annotations
 
@@ -93,8 +96,8 @@ VAULT_PATH: str = VAULT_PATHS[0] if VAULT_PATHS else ""  # primary vault (backwa
 _VAULT_LIST: list[str] = list(VAULT_PATHS)
 OLLAMA_URL   = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL  = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
-EMBED_TIMEOUT = int(os.environ.get("EMBED_TIMEOUT", "15"))
-EMBED_WORKERS       = int(os.environ.get("EMBED_WORKERS", "4"))       # parallel embedding threads
+EMBED_TIMEOUT = int(os.environ.get("EMBED_TIMEOUT", "30"))
+EMBED_WORKERS       = int(os.environ.get("EMBED_WORKERS", "1"))       # parallel embedding threads — match Ollama's serving slots (default 1, CPU-only)
 EMBED_BATCH_SIZE    = int(os.environ.get("EMBED_BATCH_SIZE", "16"))   # texts per /api/embed call (Ollama 0.4+)
 RERANK_MODEL        = os.environ.get("RERANK_MODEL", "")               # cross-encoder model; empty = disabled
 RERANK_CANDIDATES   = int(os.environ.get("RERANK_CANDIDATES", "20"))   # candidate pool size before re-ranking

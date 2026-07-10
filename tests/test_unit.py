@@ -85,6 +85,46 @@ class TestEmbed:
         assert len(captured["prompt"]) <= server.MAX_EMBED_CHARS
 
 
+# ── embed concurrency defaults ────────────────────────────────────────────────
+
+class TestEmbedConcurrencyDefaults:
+    """Regression: EMBED_WORKERS default must not outrun Ollama's actual serving
+    capacity. A CPU-only Ollama (no GPU passthrough) negotiates a single request
+    slot (`-np 1`) under normal container memory limits. With EMBED_WORKERS=4 and
+    EMBED_TIMEOUT=15, 3 of 4 concurrent embed calls always queue behind the 1
+    active slot, exceed the 15s timeout, and the exponential-backoff retry
+    resubmits at the same concurrency — a self-reinforcing thrash loop observed
+    live: the ollama container pegged at 949-1223% CPU for 14h40m during a full
+    vault reindex (see handoff-osm.md). Defaults must be conservative enough for
+    a single-slot CPU server; env overrides remain available for GPU/multi-slot
+    deployments.
+    """
+
+    def test_embed_workers_default_matches_single_slot_capacity(self):
+        import server
+        assert server.EMBED_WORKERS == 1
+
+    def test_embed_timeout_default_has_cpu_only_headroom(self):
+        import server
+        assert server.EMBED_TIMEOUT == 30
+
+    def test_embed_workers_still_overridable_via_env(self, monkeypatch):
+        """GPU/multi-slot deployments must still be able to raise concurrency."""
+        import importlib
+        import server
+
+        monkeypatch.setenv("EMBED_WORKERS", "8")
+        monkeypatch.setenv("EMBED_TIMEOUT", "5")
+        try:
+            importlib.reload(server)
+            assert server.EMBED_WORKERS == 8
+            assert server.EMBED_TIMEOUT == 5
+        finally:
+            monkeypatch.delenv("EMBED_WORKERS", raising=False)
+            monkeypatch.delenv("EMBED_TIMEOUT", raising=False)
+            importlib.reload(server)
+
+
 # ── VaultEventHandler._handle_upsert ─────────────────────────────────────────
 
 class TestWatchdogHandler:
