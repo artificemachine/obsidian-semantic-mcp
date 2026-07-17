@@ -141,6 +141,38 @@ osm status
 
 If the daemon restarts cleanly, `osm status` should report both reachability and embeddings responding.
 
+### Ollama container exited and is not auto-restarted by `docker compose up -d`
+
+**Symptoms:** `mcp-server` flips to `unhealthy`; `search_vault` semantic mode fails with `Could not resolve host: ollama`; `obsidian-semantic-mcp-ollama-1` shows `Exited (0)` in `docker compose ps -a`. Other containers (`postgres`, `dashboard`, `mcp-server`) keep running normally.
+
+**Cause:** `docker-compose.yml` declares the `ollama` and `ollama-pull` services under `profiles: [full-docker]`. A bare `docker compose up -d` (without `--profile full-docker` or `COMPOSE_PROFILES=full-docker` in the env) starts the un-profiled services and silently skips the full-docker profile. If ollama was previously stopped (manually, by `docker stop`, by OOM, or by `docker compose stop`), nothing brings it back on the next `up -d` — and mcp-server's healthcheck correctly flips to `unhealthy` because it pings `OLLAMA_URL/api/tags`. See CHANGELOG v0.11.1 for the original fix design.
+
+**Verify the profile is missing:**
+
+```bash
+docker compose -f ~/.local/share/obsidian-semantic-mcp/docker-compose.yml \
+  config --profile full-docker 2>&1 | grep -c ollama
+# → 0 means profile is silently being skipped
+```
+
+**Fix (one-time, additive):**
+
+```bash
+echo "COMPOSE_PROFILES=full-docker" >> ~/.local/share/obsidian-semantic-mcp/.env
+```
+
+**Then restart ollama:**
+
+```bash
+docker start obsidian-semantic-mcp-ollama-1
+# or, to restart the whole stack with the profile now active:
+docker compose -f ~/.local/share/obsidian-semantic-mcp/docker-compose.yml up -d
+```
+
+mcp-server's healthcheck flips green within ~30s of ollama responding; semantic search resumes.
+
+**Why `restart: unless-stopped` alone is not enough:** Docker auto-restarts a crashed/stopped container only if Docker itself is managing it. A `docker compose up -d` that filters ollama out of the active profile effectively re-classifies the container as "not managed by this compose invocation," so Docker's per-container restart policy is bypassed on the next compose call.
+
 ### Docker not found or not running
 
 `osm init` detects missing Docker and offers to install it automatically:
