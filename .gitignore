@@ -53,3 +53,7 @@ nul
 .shipguard/
 .voice-toolkit-project
 .ship-check-passed
+
+# /to-agents backup files (rule file edits preserve via git history; backups are off-tree)
+.backups/
+*.bak-to-agents-*
