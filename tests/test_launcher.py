@@ -155,7 +155,11 @@ def test_missing_vault_exits(tmp_path, monkeypatch):
     monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
     monkeypatch.delenv("OSM_DOCKER", raising=False)
 
+    # Patch _project_root to None so the launcher doesn't load_dotenv() from the
+    # repo's .env file (which would re-inject POSTGRES_PASSWORD and bypass the
+    # validation we're trying to exercise).
     with patch("subprocess.run", side_effect=FileNotFoundError), \
+         patch("src.launcher._project_root", return_value=None), \
          pytest.raises(SystemExit) as exc_info:
         from src import launcher
         launcher.main()
@@ -173,7 +177,10 @@ def test_missing_db_config_exits(tmp_path, monkeypatch):
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
     monkeypatch.delenv("OSM_DOCKER", raising=False)
 
+    # Same isolation rationale as test_missing_vault_exits above: skip the
+    # .env-file load so the test's deleted env vars stay deleted.
     with patch("subprocess.run", side_effect=FileNotFoundError), \
+         patch("src.launcher._project_root", return_value=None), \
          pytest.raises(SystemExit) as exc_info:
         from src import launcher
         launcher.main()
