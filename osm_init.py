@@ -2349,6 +2349,13 @@ def cmd_rebuild():
 # backfill_embedding_column / cutover_embedding_column).
 
 
+# NOT REGISTERED in COMMANDS. `migrations.migrate_embedding_dimension()` and
+# its add/backfill/cutover helpers are implemented and covered by the pg suite,
+# but this CLI wrapper's Docker-exec delegation has never been executed against
+# a live container, and the native (non-Docker) path is not wired at all.
+# Shipping an unexecuted destructive command in a public release is not a trade
+# worth making, so the subcommand is withheld until that path is verified.
+# Re-register in COMMANDS (and restore the two `osm help` lines) at that point.
 def cmd_migrate():
     header("OSM Migrate — embedding dimension")
     hr()
@@ -2839,8 +2846,6 @@ def cmd_help():
     print(f"    osm vaults                                  # List configured vault(s)")
     print(f"    osm tunnel                                  # Reconnect SSH tunnel")
     print(f"    osm rebuild                                 # Rebuild Docker images")
-    print(f"    osm migrate --embedding-dim 1024            # Non-destructive dimension migration")
-    print(f"    osm migrate --embedding-dim 1024 --dry-run  # Preview the migration plan only")
     print(f"    osm update                                  # Pull latest images and restart")
     print(f"    osm version                                 # Show version and check for updates")
     print(
@@ -2858,7 +2863,6 @@ COMMANDS = {
     "dashboard": (cmd_dashboard, "Open monitoring dashboard in browser"),
     "tunnel": (cmd_tunnel, "Reconnect SSH tunnel to remote Ollama host"),
     "rebuild": (cmd_rebuild, "Rebuild Docker images and restart"),
-    "migrate": (cmd_migrate, "Non-destructive embedding-dimension migration (--embedding-dim N)"),
     "update": (cmd_update, "Pull latest Docker images and restart services"),
     "version": (cmd_version, "Show installed version and check for updates"),
     "remove": (cmd_remove, "Stop services, delete volumes and config"),

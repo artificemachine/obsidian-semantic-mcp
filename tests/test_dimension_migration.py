@@ -111,15 +111,29 @@ def dimension_on_pg(pg, monkeypatch):
 # ── Smoke ─────────────────────────────────────────────────────────────────
 
 def test_smoke_migrate_help_and_imports():
-    assert "migrate" in osm_init.COMMANDS
+    """The migration machinery imports cleanly even though the CLI subcommand
+    is withheld — see test_osm_migrate_subcommand_is_withheld_until_verified."""
     from migrations import migrate_embedding_dimension  # noqa: F401 — must import cleanly
 
 
 # ── Unit ──────────────────────────────────────────────────────────────────
 
-def test_osm_migrate_subcommand_is_registered():
-    assert "migrate" in osm_init.COMMANDS
-    assert osm_init.COMMANDS["migrate"][0] is osm_init.cmd_migrate
+def test_osm_migrate_subcommand_is_withheld_until_verified():
+    """`migrate` is deliberately NOT in COMMANDS.
+
+    cmd_migrate and the migrations.py logic beneath it exist and are covered,
+    but the Docker-exec delegation has never run against a live container and
+    the native path is unwired. This asserts the subcommand stays unreachable
+    from the CLI until that changes — inverted deliberately, so re-registering
+    it fails here and forces a conscious decision rather than slipping in.
+    """
+    assert "migrate" not in osm_init.COMMANDS, (
+        "osm migrate is registered again — verify the Docker-exec path against "
+        "a live container and wire the native path before flipping this test."
+    )
+    # The implementation must still be present and importable: withheld from
+    # the CLI, not deleted.
+    assert callable(osm_init.cmd_migrate)
     assert osm_init._FLAG_MAP.get("embedding-dim") == "embedding_dim"
 
 
