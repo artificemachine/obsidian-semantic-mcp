@@ -10,6 +10,7 @@ Usage:
 """
 from __future__ import annotations
 
+import hmac
 import http.server
 import json
 import os
@@ -23,16 +24,21 @@ from urllib.parse import urlparse, parse_qs
 import requests
 
 try:
-    from .config import build_dsn  # installed as a package (uv tool / pip install)
-    from .server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS, _should_skip_path
+    from .config import build_dsn, _redact_dsn, resolve_dashboard_token  # installed as a package (uv tool / pip install)
+    from .server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS, _should_skip_path, reindex_lock
 except ImportError:
-    from config import build_dsn  # fallback: run directly from src/ during dev
-    from server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS, _should_skip_path
+    from config import build_dsn, _redact_dsn, resolve_dashboard_token  # fallback: run directly from src/ during dev
+    from server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS, _should_skip_path, reindex_lock
 
 VAULT_PATH  = VAULT_PATHS[0] if VAULT_PATHS else ""
 OLLAMA_URL  = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 DASH_PORT   = int(os.environ.get("DASHBOARD_PORT", "8484"))
+# Loopback by default — the dashboard exposes destructive mutating endpoints
+# (see iteration 2's auth gate). Set DASHBOARD_BIND=0.0.0.0 explicitly to
+# expose it beyond localhost (Docker sets this since the container's
+# loopback isn't the host's).
+DASHBOARD_BIND = os.environ.get("DASHBOARD_BIND", "127.0.0.1")
 
 DATABASE_URL = build_dsn()
 
@@ -50,7 +56,32 @@ def _read_version() -> str:
 
 APP_VERSION = _read_version()
 
-_reindex_lock = threading.Lock()
+# Bearer token guarding the mutating endpoints (/api/reindex, /api/reindex/full,
+# /api/prune, /api/ollama/start). Resolved once at import time — see
+# config.resolve_dashboard_token() for the DASHBOARD_TOKEN-env / config-file /
+# generate-and-persist precedence.
+DASHBOARD_TOKEN: str | None = None
+
+
+def get_dashboard_token() -> str:
+    """Resolve the bearer token on first use, caching it in DASHBOARD_TOKEN.
+
+    Deliberately NOT resolved at import time. resolve_dashboard_token()
+    generates and persists a token file on first call, so an import-time
+    call would make merely importing this module write a secret to
+    ~/.config/obsidian-semantic-mcp/ — which anything that imports for
+    reasons of its own (test collection, a linter, an IDE indexer, a doc
+    generator) would then trigger as a side effect. Resolve when a request
+    actually needs the token instead.
+
+    DASHBOARD_TOKEN stays a module attribute rather than a private cache so
+    tests can monkeypatch it directly to a known value; a non-None value
+    here short-circuits resolution entirely.
+    """
+    global DASHBOARD_TOKEN
+    if DASHBOARD_TOKEN is None:
+        DASHBOARD_TOKEN = resolve_dashboard_token()
+    return DASHBOARD_TOKEN
 
 # Ollama health cache: (result_dict, expiry_timestamp)
 _ollama_cache: tuple[dict, float] | None = None
@@ -305,6 +336,8 @@ def gather_stats() -> dict:
         "reindex_busy": False,
         "last_rebuild_failed_count": 0,
         "last_rebuild_failed_sample": [],
+        "dimension_mismatch": False,
+        "dimension_mismatch_message": None,
         "recent_notes": [],
         "pg_version": "—",
         "pgvector_version": "—",
@@ -325,9 +358,12 @@ def gather_stats() -> dict:
     except Exception as e:
         stats["ollama_error"] = str(e)
 
-    acquired = _reindex_lock.acquire(blocking=False)
-    if acquired:
-        _reindex_lock.release()
+    # Probe the shared Postgres advisory lock rather than a process-local
+    # threading.Lock — see reindex_lock()'s docstring. A probe acquire+
+    # release in one `with` correctly reports busy=True whenever ANOTHER
+    # process/container holds the lock, not just another thread in this one.
+    with reindex_lock() as acquired:
+        pass
     stats["reindex_busy"] = not acquired
 
     try:
@@ -335,6 +371,16 @@ def gather_stats() -> dict:
         failed = get_last_rebuild_failures()
         stats["last_rebuild_failed_count"] = len(failed)
         stats["last_rebuild_failed_sample"] = failed[:5]
+    except Exception:
+        pass
+
+    try:
+        from server import get_index_state
+        for row in get_index_state():
+            if row["status"] == "dimension_mismatch":
+                stats["dimension_mismatch"] = True
+                stats["dimension_mismatch_message"] = row["error"]
+                break
     except Exception:
         pass
 
@@ -563,6 +609,8 @@ HTML_PAGE = """<!DOCTYPE html>
 <p class="footer" id="footer">Fetching...</p>
 
 <script>
+const DASHBOARD_TOKEN = "{{TOKEN}}";
+
 function timeAgo(iso) {
   if (!iso) return '—';
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -678,7 +726,10 @@ async function triggerReindex(full) {
   btn.disabled = true;
   btn.textContent = 'Starting\u2026';
   try {
-    const r = await fetch(full ? '/api/reindex/full' : '/api/reindex', { method: 'POST' });
+    const r = await fetch(full ? '/api/reindex/full' : '/api/reindex', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + DASHBOARD_TOKEN },
+    });
     const d = await r.json();
     if (d.ok) {
       btn.textContent = 'Running\u2026';
@@ -699,7 +750,10 @@ async function startOllama() {
   btn.disabled = true;
   btn.textContent = 'Starting...';
   try {
-    const r = await fetch('/api/ollama/start', { method: 'POST' });
+    const r = await fetch('/api/ollama/start', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + DASHBOARD_TOKEN },
+    });
     const d = await r.json();
     btn.textContent = d.ok ? 'Started' : 'Failed';
     setTimeout(fetchStats, 3000);
@@ -757,6 +811,14 @@ setInterval(fetchStats, 30000);
 </html>"""
 
 HTML_PAGE = HTML_PAGE.replace("{{VERSION}}", f"v{APP_VERSION}")
+# {{TOKEN}} is deliberately NOT substituted here — see get_dashboard_token().
+# Import-time substitution would force token resolution (and its file write)
+# at import. The placeholder is filled per-request in _render_page().
+
+
+def _render_page() -> bytes:
+    """Return the dashboard HTML with the live bearer token injected."""
+    return HTML_PAGE.replace("{{TOKEN}}", get_dashboard_token()).encode()
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
@@ -768,6 +830,28 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _require_auth(self) -> bool:
+        """Gate mutating endpoints behind a bearer token.
+
+        Returns True and does nothing further when the request carries a
+        valid `Authorization: Bearer <token>` header. On any mismatch (header
+        missing, malformed, or wrong token) writes a 401 in the same
+        `{"ok": ..., "message": ...}` shape every other branch uses and
+        returns False — callers must `return` immediately when this is False.
+
+        GET endpoints intentionally do not call this: they are read-only and,
+        as of iteration 1, loopback-bound by default. Gating them would
+        require solving initial page-load auth, which is out of this plan's
+        scope.
+        """
+        header = self.headers.get("Authorization", "")
+        prefix = "Bearer "
+        supplied = header[len(prefix):] if header.startswith(prefix) else ""
+        if not supplied or not hmac.compare_digest(supplied, get_dashboard_token()):
+            self._json_response(401, {"ok": False, "message": "unauthorized"})
+            return False
+        return True
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -790,14 +874,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             vaults = [{"name": os.path.basename(v), "path": v} for v in VAULT_PATHS]
             self._json_response(200, {"vaults": vaults})
         elif parsed.path == "/api/reindex/status":
-            acquired = _reindex_lock.acquire(blocking=False)
-            if acquired:
-                _reindex_lock.release()
+            with reindex_lock() as acquired:
+                pass
             self._json_response(200, {"busy": not acquired})
         elif parsed.path == "/api/stats":
             self._json_response(200, gather_stats())
         else:
-            body = HTML_PAGE.encode()
+            body = _render_page()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -805,54 +888,71 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_POST(self) -> None:
+        if not self._require_auth():
+            return
         path = urlparse(self.path).path
         if path == "/api/ollama/start":
-            try:
-                subprocess.Popen(
-                    ["ollama", "serve"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                self._json_response(200, {"ok": True, "message": "ollama serve started"})
-            except Exception as e:
-                self._json_response(500, {"ok": False, "message": str(e)})
-
+            self._handle_ollama_start()
         elif path in ("/api/reindex", "/api/reindex/full"):
-            if not VAULT_PATHS:
-                self._json_response(400, {"ok": False, "message": "No vault configured"})
-                return
-            if not _reindex_lock.acquire(blocking=False):
-                self._json_response(409, {"ok": False, "message": "Re-index already in progress"})
-                return
-
-            full = path == "/api/reindex/full"
-
-            def _run():
-                try:
-                    if full:
-                        with db_conn() as conn:
-                            with conn:
-                                with conn.cursor() as cur:
-                                    cur.execute("DELETE FROM notes;")
-                    for vp in VAULT_PATHS:
-                        index_vault(vp)
-                finally:
-                    _reindex_lock.release()
-
-            threading.Thread(target=_run, daemon=True).start()
-            self._json_response(200, {"ok": True, "message": "started"})
-
+            self._handle_reindex(full=path == "/api/reindex/full")
         elif path == "/api/prune":
-            try:
-                from server import prune_orphans
-                n = prune_orphans()
-                self._json_response(200, {"ok": True, "deleted": n})
-            except Exception as e:
-                self._json_response(500, {"ok": False, "message": str(e)})
-
+            self._handle_prune()
         else:
             self._json_response(404, {"error": "not found"})
+
+    def _handle_ollama_start(self) -> None:
+        try:
+            subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            self._json_response(200, {"ok": True, "message": "ollama serve started"})
+        except Exception as e:
+            self._json_response(500, {"ok": False, "message": str(e)})
+
+    def _busy_response(self) -> None:
+        self._json_response(409, {"ok": False, "message": "Re-index already in progress"})
+
+    def _handle_reindex(self, *, full: bool) -> None:
+        if not VAULT_PATHS:
+            self._json_response(400, {"ok": False, "message": "No vault configured"})
+            return
+
+        # Acquired here, on the request-handling thread, so we can respond
+        # 409 synchronously; released inside the background worker thread
+        # once indexing finishes — see reindex_lock()'s docstring for why
+        # acquire and release deliberately happen on different threads.
+        lock_cm = reindex_lock()
+        acquired = lock_cm.__enter__()
+        if not acquired:
+            lock_cm.__exit__(None, None, None)
+            self._busy_response()
+            return
+
+        def _run():
+            try:
+                if full:
+                    with db_conn() as conn:
+                        with conn:
+                            with conn.cursor() as cur:
+                                cur.execute("DELETE FROM notes;")
+                for vp in VAULT_PATHS:
+                    index_vault(vp)
+            finally:
+                lock_cm.__exit__(None, None, None)
+
+        threading.Thread(target=_run, daemon=True).start()
+        self._json_response(200, {"ok": True, "message": "started"})
+
+    def _handle_prune(self) -> None:
+        try:
+            from server import prune_orphans
+            n = prune_orphans()
+            self._json_response(200, {"ok": True, "deleted": n})
+        except Exception as e:
+            self._json_response(500, {"ok": False, "message": str(e)})
 
     def log_message(self, format, *args):
         # Suppress default request logging
@@ -860,10 +960,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = http.server.HTTPServer(("0.0.0.0", DASH_PORT), DashboardHandler)
-    print(f"Dashboard running at http://localhost:{DASH_PORT}")
+    server = http.server.HTTPServer((DASHBOARD_BIND, DASH_PORT), DashboardHandler)
+    print(f"Dashboard running at http://{DASHBOARD_BIND}:{DASH_PORT}")
     print(f"Vault: {VAULT_PATH or '(not set)'}")
-    print(f"Database: {DATABASE_URL}")
+    print(f"Database: {_redact_dsn(DATABASE_URL)}")
     print("Press Ctrl+C to stop.\n")
     try:
         server.serve_forever()

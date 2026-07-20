@@ -73,9 +73,11 @@ for _env_path in _ENV_SEARCH_PATHS:
         break
 
 try:
-    from .config import build_dsn, REQUIRED_FRONTMATTER_DEFAULTS  # installed as a package (uv tool / pip install)
+    from . import migrations
+    from .config import build_dsn, REQUIRED_FRONTMATTER_DEFAULTS, REINDEX_LOCK_KEY  # installed as a package (uv tool / pip install)
 except ImportError:
-    from config import build_dsn, REQUIRED_FRONTMATTER_DEFAULTS  # fallback: run directly from src/ during dev
+    import migrations
+    from config import build_dsn, REQUIRED_FRONTMATTER_DEFAULTS, REINDEX_LOCK_KEY  # fallback: run directly from src/ during dev
 
 
 # ─────────────────────────────────── Config ─────────────────────────────────
@@ -119,13 +121,15 @@ _DEBOUNCE_SECS  = 0.5   # collapse rapid saves from Obsidian autosave
 # instead of the misleading "No indexed notes found. Try running reindex_vault."
 # threading.Event is used rather than a bare bool to avoid any cross-thread
 # visibility issues without relying on the GIL.
+#
+# Kept as a fast in-process short-circuit even after iteration 6 made
+# index_state (Postgres) the source of truth for indexing status — a DB
+# round-trip on every search would be wasteful when this process itself is
+# the one indexing. It is NOT cross-process visible: a search hitting a
+# *different* container while *this* one indexes will not see it set. That
+# case is covered by index_state, which get_last_rebuild_failures() and
+# /api/stats read instead.
 _INDEXING_IN_PROGRESS = threading.Event()
-
-# Paths that failed to index on the most recent index_vault() run, after one
-# retry pass. Surfaced via get_last_rebuild_failures() so /api/stats can warn
-# operators about silent data loss when Ollama wedges mid-rebuild.
-_LAST_REBUILD_FAILED: list[str] = []
-_LAST_REBUILD_FAILED_LOCK = threading.Lock()
 
 # Wikilink graph: stem.lower() → absolute path for all indexed .md files.
 # Rebuilt by index_vault(); incrementally updated by the file watcher.
@@ -135,16 +139,6 @@ _link_index_lock = threading.Lock()
 # Matches [[note]], [[note|alias]], [[note#heading]], [[folder/note]]
 _WIKILINK_RE = re.compile(r'\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]')
 
-
-def get_last_rebuild_failures() -> list[str]:
-    with _LAST_REBUILD_FAILED_LOCK:
-        return list(_LAST_REBUILD_FAILED)
-
-
-def _set_last_rebuild_failures(paths: list[str]) -> None:
-    with _LAST_REBUILD_FAILED_LOCK:
-        _LAST_REBUILD_FAILED.clear()
-        _LAST_REBUILD_FAILED.extend(paths)
 
 def extract_wikilinks(content: str) -> list[str]:
     """Return all wikilink targets found in content (deduplicated, order-preserved)."""
@@ -266,10 +260,102 @@ def db_conn():
         pool.putconn(conn)
 
 
+@contextlib.contextmanager
+def reindex_lock():
+    """Postgres advisory lock guarding re-index mutual exclusion.
+
+    Replaces the process-local `threading.Lock` that used to live in
+    dashboard.py: a `threading.Lock` only coordinates threads within one
+    process, so the dashboard container and the MCP server container (or
+    two dashboard replicas) could each acquire their own lock and run a
+    full re-index concurrently — the Stage 6 HIGH finding this fixes.
+
+    Session-level (`pg_try_advisory_lock` / `pg_advisory_unlock`), not
+    `pg_advisory_xact_lock`: the lock must outlive the short transaction
+    that acquires it and span the whole re-index pass, which can run for
+    hours on a CPU-only Ollama.
+
+    Held on a DEDICATED connection checked out from the pool for the whole
+    critical section — never a connection returned to the pool while the
+    lock is still held. Session-level advisory locks are bound to the
+    session (the connection): returning the connection to the pool mid-hold
+    would let some unrelated caller borrow that same connection and would
+    silently release the lock as a side effect of that connection's next
+    use, not of an explicit unlock call.
+
+    Non-blocking: `pg_try_advisory_lock` returns immediately rather than
+    waiting. Callers that get `False` must NOT proceed with the re-index —
+    another holder already has it (dashboard's 409 / the MCP tool's "busy"
+    message both key off this).
+
+    Yields `False` (rather than raising) when no DB connection can be
+    obtained at all, so a caller can treat "DB unreachable" and "lock held
+    by someone else" the same way — neither should be started as if a lock
+    signal were missing entirely.
+
+    The connection pool is `ThreadedConnectionPool(1, 5)`. Holding one
+    connection for the duration of a re-index leaves 4 free — acceptable,
+    but do not raise the pool minimum without understanding this: a
+    minconn bump would eagerly open connections this lock's hold pattern
+    doesn't need released early.
+
+    Usable both as `with reindex_lock() as acquired:` for a single
+    acquire-do-release scope, and via manual `.__enter__()` / `.__exit__()`
+    when the acquiring thread (an HTTP request handler) and the releasing
+    thread (a background re-index worker) are different — the generator-
+    based context manager object has no thread affinity of its own.
+    """
+    try:
+        pool = _get_pool()
+        conn = pool.getconn()
+    except Exception as e:
+        log.warning("reindex_lock: could not obtain a DB connection: %s", e)
+        yield False
+        return
+
+    acquired = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (REINDEX_LOCK_KEY,))
+            acquired = bool(cur.fetchone()[0])
+        conn.commit()
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (REINDEX_LOCK_KEY,))
+                conn.commit()
+                pool.putconn(conn)
+            except Exception as e:
+                log.warning("reindex_lock: failed to release advisory lock: %s", e)
+                pool.putconn(conn, close=True)
+        else:
+            pool.putconn(conn)
+
+
 def init_db(embed_dim: int = 768) -> None:
+    # The `notes` table itself is created here, not in migrations.py: its
+    # embedding column dimension is a runtime value (probed from the
+    # configured Ollama model) that a static, versioned migration list
+    # can't parameterize. Everything that doesn't depend on embed_dim
+    # (note_links, the three pre-existing indexes, index_state) lives in
+    # migrations.py — see its module docstring.
     with db_conn() as conn:
         with conn:
             with conn.cursor() as cur:
+                # init_db runs on EVERY boot and issues ALTER TABLE, which needs
+                # ACCESS EXCLUSIVE on `notes`. Unbounded, a single open reader
+                # transaction (a dashboard search, an MCP query, a psql session
+                # left idle in transaction) stalls startup indefinitely — and
+                # every reader arriving after the blocked ALTER queues behind
+                # it, so a slow boot escalates into a fully unavailable table.
+                #
+                # Observed 2026-07-20 against a real Postgres: `ALTER TABLE
+                # notes ADD COLUMN IF NOT EXISTS content_tsv` blocked behind an
+                # idle-in-transaction SELECT until the process was killed.
+                # Bound the wait so boot fails fast and visibly instead.
+                cur.execute("SET LOCAL lock_timeout = '5s';")
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
                 # embed_dim is an int from the embedding model config, never request
                 # input, and pgvector's vector(N) type doesn't accept a %s parameter
@@ -301,29 +387,24 @@ def init_db(embed_dim: int = 768) -> None:
                         "UPDATE notes SET vault_id = %s WHERE vault_id IS NULL",
                         (VAULT_PATH,),
                     )
-                # Index for per-vault filtered searches
-                cur.execute("""
-                    CREATE INDEX IF NOT EXISTS notes_vault_idx ON notes (vault_id);
-                """)
-                # GIN index for full-text search
-                cur.execute("""
-                    CREATE INDEX IF NOT EXISTS notes_tsv_idx
-                    ON notes USING GIN (content_tsv);
-                """)
-                # Wikilink graph table
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS note_links (
-                        source_path TEXT NOT NULL,
-                        target_name TEXT NOT NULL,
-                        target_path TEXT,
-                        PRIMARY KEY (source_path, target_name)
-                    );
-                """)
-                cur.execute("""
-                    CREATE INDEX IF NOT EXISTS note_links_target_idx
-                    ON note_links (target_path);
-                """)
-                # Check existing embedding dimension vs current model
+
+    # Versioned, idempotent migrations — note_links, its index, the two
+    # notes_* indexes, and index_state. Must run after the notes table
+    # exists (migration 1's indexes reference its columns) and before the
+    # auto-tune below (which needs index_state to already exist for
+    # consistency, and note_links/notes_* indexes to be in place).
+    with db_conn() as conn:
+        migrations.apply_pending(conn)
+
+    with db_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                # Check existing embedding dimension vs current model.
+                # Boot DETECTS a mismatch, it does NOT migrate — a container
+                # restart must never be able to begin an hours-long re-embed.
+                # The old column keeps serving search results exactly as
+                # before; the operator runs `osm migrate --embedding-dim`
+                # when ready (see migrations.py's migrate_embedding_dimension).
                 cur.execute("""
                     SELECT format_type(a.atttypid, a.atttypmod)
                     FROM pg_attribute a
@@ -332,16 +413,21 @@ def init_db(embed_dim: int = 768) -> None:
                       AND a.attnum > 0 AND NOT a.attisdropped
                 """)
                 row = cur.fetchone()
+                dimension_mismatch = False
+                existing_dim = None
                 if row:
                     m = re.search(r'vector\((\d+)\)', row[0])
                     if m:
                         existing_dim = int(m.group(1))
                         if existing_dim != embed_dim:
+                            dimension_mismatch = True
                             log.warning(
                                 "Embedding dimension mismatch: DB has vector(%d) but "
-                                "%s produces %d. Run `docker compose down -v` to wipe "
-                                "and reindex with the new model.",
-                                existing_dim, EMBED_MODEL, embed_dim,
+                                "%s produces %d. Existing index keeps serving on "
+                                "vector(%d) — no automatic migration runs. Operator "
+                                "action: `osm migrate --embedding-dim %d` migrates "
+                                "without data loss.",
+                                existing_dim, EMBED_MODEL, embed_dim, existing_dim, embed_dim,
                             )
                 # Auto-tune IVFFlat lists based on vault size
                 cur.execute("SELECT COUNT(*) FROM notes")
@@ -354,6 +440,139 @@ def init_db(embed_dim: int = 768) -> None:
                     f"WITH (lists = {int(lists)});"
                 )
     log.info("Database initialised (IVFFlat lists=%d, embed_dim=%d)", lists, embed_dim)
+
+    if dimension_mismatch:
+        mismatch_error = (
+            f"DB has vector({existing_dim}) but {EMBED_MODEL} produces "
+            f"vector({embed_dim}). Run `osm migrate --embedding-dim {embed_dim}` "
+            f"to migrate without data loss."
+        )
+        # Recorded per vault (index_state is keyed by vault_id) — the
+        # mismatch is a database-wide condition, but every configured
+        # vault's search is equally affected by it.
+        for vp in VAULT_PATHS:
+            set_index_state(vp, "dimension_mismatch", error=mismatch_error)
+
+
+def _row_to_index_state_dict(row: tuple) -> dict:
+    vault_id, status, started_at, finished_at, failed_paths, error = row
+    return {
+        "vault_id": vault_id,
+        "status": status,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "failed_paths": list(failed_paths or []),
+        "error": error,
+    }
+
+
+def set_index_state(
+    vault_id: str,
+    status: str,
+    *,
+    failed_paths: list[str] | None = None,
+    error: str | None = None,
+) -> None:
+    """Upsert this vault's row in index_state.
+
+    Called at the start ("indexing"), end ("idle" or "failed"), and
+    exception path of background_init/index_vault so indexing progress and
+    failures are visible across process/container boundaries — the
+    module-global list this replaces was only ever readable by the process
+    that set it, which is why the dashboard's rebuild-failure panel was
+    structurally always empty (it runs in a separate container).
+
+    Never raises — a failure writing observability data must not abort an
+    in-flight index pass. Logs a warning and returns on any DB error.
+    """
+    try:
+        with db_conn() as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    if status == "indexing":
+                        cur.execute(
+                            """
+                            INSERT INTO index_state
+                                (vault_id, status, started_at, finished_at, failed_paths, error)
+                            VALUES (%s, %s, NOW(), NULL, %s, NULL)
+                            ON CONFLICT (vault_id) DO UPDATE
+                                SET status       = EXCLUDED.status,
+                                    started_at   = NOW(),
+                                    finished_at  = NULL,
+                                    failed_paths = EXCLUDED.failed_paths,
+                                    error        = NULL
+                            """,
+                            (vault_id, status, failed_paths or []),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO index_state
+                                (vault_id, status, started_at, finished_at, failed_paths, error)
+                            VALUES (%s, %s, NULL, NOW(), %s, %s)
+                            ON CONFLICT (vault_id) DO UPDATE
+                                SET status       = EXCLUDED.status,
+                                    finished_at  = NOW(),
+                                    failed_paths = EXCLUDED.failed_paths,
+                                    error        = EXCLUDED.error
+                            """,
+                            (vault_id, status, failed_paths or [], error),
+                        )
+    except Exception as e:
+        log.warning(
+            "set_index_state failed for vault_id=%s status=%s: %s", vault_id, status, e
+        )
+
+
+def get_index_state(vault_id: str | None = None):
+    """Return index_state row(s).
+
+    With `vault_id`: a single dict, or None if that vault has no row yet.
+    Without: a list of dicts, one per vault, ordered by vault_id.
+
+    Unlike set_index_state, this DOES raise on a DB error — callers that
+    must degrade gracefully (get_last_rebuild_failures, the /api/stats
+    path) catch it explicitly rather than have failure silently disguised
+    as "no vaults indexed yet."
+    """
+    with db_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                if vault_id is not None:
+                    cur.execute(
+                        "SELECT vault_id, status, started_at, finished_at, failed_paths, error "
+                        "FROM index_state WHERE vault_id = %s",
+                        (vault_id,),
+                    )
+                    row = cur.fetchone()
+                    return _row_to_index_state_dict(row) if row else None
+                cur.execute(
+                    "SELECT vault_id, status, started_at, finished_at, failed_paths, error "
+                    "FROM index_state ORDER BY vault_id"
+                )
+                return [_row_to_index_state_dict(r) for r in cur.fetchall()]
+
+
+def get_last_rebuild_failures() -> list[str]:
+    """Union of failed_paths across every vault's index_state row.
+
+    Falls back to an empty list on any DB error rather than raising —
+    observability (the dashboard's rebuild-failure panel) must never break
+    the /api/stats endpoint that surfaces it.
+    """
+    try:
+        rows = get_index_state()
+    except Exception as e:
+        log.warning("get_last_rebuild_failures: could not read index_state: %s", e)
+        return []
+    failed: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for path in row["failed_paths"]:
+            if path not in seen:
+                seen.add(path)
+                failed.append(path)
+    return failed
 
 
 # ──────────────────────────────── Embeddings ─────────────────────────────────
@@ -673,6 +892,20 @@ def delete_note(path: str) -> None:
     log.info("Removed: %s", path)
 
 
+def _safe_delete_note(path: str) -> None:
+    """delete_note(), guarded so a DB outage can never kill the watchdog
+    observer thread. watchdog invokes handler callbacks directly on its
+    observer thread with no supervising try/except of its own — an
+    unguarded exception here (e.g. psycopg2.OperationalError while Postgres
+    is unreachable) propagates out of the callback and silently ends all
+    further event dispatch on that observer, which looks like indexing has
+    just stopped rather than like a crash."""
+    try:
+        delete_note(path)
+    except Exception as e:
+        log.warning("Watcher: delete_note failed for %s: %s", path, e)
+
+
 def _run_embed_pass(batch: list[tuple[str, str, str]], vault: str) -> list[str]:
     """Embed + upsert by chunking into EMBED_BATCH_SIZE-sized batches and
     submitting each batch to a worker pool. Each batch is one /api/embed
@@ -712,62 +945,81 @@ def prune_orphans() -> int:
 
 def index_vault(vault: str) -> None:
     """Walk the vault and index every markdown file (parallel, hash-skipping)."""
-    root = Path(vault)
-    md_files = [f for f in root.rglob("*.md") if not _should_skip_path(f)]
-    log.info("Indexing %d notes in %s…", len(md_files), vault)
-
-    # Build link index before embedding so _upsert_note can resolve wikilinks.
-    new_index = _build_link_index(vault)
-    with _link_index_lock:
-        _link_index.update(new_index)
-    log.info("Link index built: %d entries for %s", len(new_index), vault)
-
-    # Read all contents and compute hashes in the main thread (fast, no DB)
-    file_data: list[tuple[str, str, str]] = []  # (path_str, content, hash)
-    for f in md_files:
-        try:
-            content = f.read_text(encoding="utf-8", errors="ignore")
-            file_data.append((str(f), content, file_hash(content)))
-        except Exception as e:
-            log.warning("Skipped reading %s: %s", f, e)
-
-    # Single DB query to fetch all existing hashes
-    paths = [item[0] for item in file_data]
-    existing = _bulk_load_hashes(paths)
-
-    # Filter to only files that are new or changed
-    changed = [(p, c, h) for p, c, h in file_data if existing.get(p) != h]
-    skipped = len(file_data) - len(changed)
-    log.info("Changed: %d, Skipped (unchanged): %d", len(changed), skipped)
-
-    # Parallel embed + upsert. Track failed paths so we can retry once —
-    # Ollama tends to wedge under heavy concurrent load, and a single retry
-    # after the first pass usually catches transient timeouts. Without this,
-    # a wedged Ollama silently drops notes from a full rebuild.
-    by_path = {p: (p, c, h) for p, c, h in changed}
-    failed: list[str] = _run_embed_pass(list(by_path.values()), vault)
-
-    if failed:
-        log.warning("First pass had %d failures — retrying once", len(failed))
-        retry_batch = [by_path[p] for p in failed if p in by_path]
-        failed = _run_embed_pass(retry_batch, vault)
-
-    _set_last_rebuild_failures(failed)
-    if failed:
-        log.warning("Indexing finished with %d persistent failures", len(failed))
-
-    # Rebuild IVFFlat index now that data exists — an index built on an empty
-    # table has no list centroids and returns zero results.
+    set_index_state(vault, "indexing")
     try:
-        with db_conn() as conn:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute("REINDEX INDEX notes_embedding_idx;")
-        log.info("Rebuilt IVFFlat index")
-    except Exception as e:
-        log.warning("Index rebuild skipped: %s", e)
+        root = Path(vault)
+        # rglob on a nonexistent directory yields nothing rather than raising,
+        # so without this check a vault that vanished (unmounted NAS, deleted
+        # folder, typo'd OBSIDIAN_VAULT) indexes zero notes and reports
+        # SUCCESS — the exact silent-failure mode index_state exists to make
+        # visible. Fail loudly instead so the except branch records it.
+        if not root.is_dir():
+            raise FileNotFoundError(
+                f"Vault path does not exist or is not a directory: {vault}"
+            )
+        md_files = [f for f in root.rglob("*.md") if not _should_skip_path(f)]
+        log.info("Indexing %d notes in %s…", len(md_files), vault)
 
-    log.info("Vault indexing complete")
+        # Build link index before embedding so _upsert_note can resolve wikilinks.
+        new_index = _build_link_index(vault)
+        with _link_index_lock:
+            _link_index.update(new_index)
+        log.info("Link index built: %d entries for %s", len(new_index), vault)
+
+        # Read all contents and compute hashes in the main thread (fast, no DB)
+        file_data: list[tuple[str, str, str]] = []  # (path_str, content, hash)
+        for f in md_files:
+            try:
+                content = f.read_text(encoding="utf-8", errors="ignore")
+                file_data.append((str(f), content, file_hash(content)))
+            except Exception as e:
+                log.warning("Skipped reading %s: %s", f, e)
+
+        # Single DB query to fetch all existing hashes
+        paths = [item[0] for item in file_data]
+        existing = _bulk_load_hashes(paths)
+
+        # Filter to only files that are new or changed
+        changed = [(p, c, h) for p, c, h in file_data if existing.get(p) != h]
+        skipped = len(file_data) - len(changed)
+        log.info("Changed: %d, Skipped (unchanged): %d", len(changed), skipped)
+
+        # Parallel embed + upsert. Track failed paths so we can retry once —
+        # Ollama tends to wedge under heavy concurrent load, and a single retry
+        # after the first pass usually catches transient timeouts. Without this,
+        # a wedged Ollama silently drops notes from a full rebuild.
+        by_path = {p: (p, c, h) for p, c, h in changed}
+        failed: list[str] = _run_embed_pass(list(by_path.values()), vault)
+
+        if failed:
+            log.warning("First pass had %d failures — retrying once", len(failed))
+            retry_batch = [by_path[p] for p in failed if p in by_path]
+            failed = _run_embed_pass(retry_batch, vault)
+
+        if failed:
+            log.warning("Indexing finished with %d persistent failures", len(failed))
+            set_index_state(
+                vault, "failed", failed_paths=failed,
+                error=f"{len(failed)} note(s) failed to index after retry",
+            )
+        else:
+            set_index_state(vault, "idle", failed_paths=[])
+
+        # Rebuild IVFFlat index now that data exists — an index built on an empty
+        # table has no list centroids and returns zero results.
+        try:
+            with db_conn() as conn:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute("REINDEX INDEX notes_embedding_idx;")
+            log.info("Rebuilt IVFFlat index")
+        except Exception as e:
+            log.warning("Index rebuild skipped: %s", e)
+
+        log.info("Vault indexing complete")
+    except Exception as e:
+        set_index_state(vault, "failed", error=str(e))
+        raise
 
 
 # ─────────────────────────────── File Watcher ────────────────────────────────
@@ -803,7 +1055,13 @@ class VaultEventHandler(FileSystemEventHandler):
                 _link_index[stem] = path
             index_note(path, content, self._vault_id)
         except FileNotFoundError:
-            delete_note(path)
+            # File vanished between the debounce firing and this read (e.g.
+            # a rapid create+delete, or an editor's atomic-save temp-file
+            # dance). Recover via the guarded delete so a DB outage during
+            # *this* recovery path cannot escape and kill the observer
+            # thread — the same defect class this iteration fixes below in
+            # on_deleted/on_moved, just reached via a different trigger.
+            _safe_delete_note(path)
         except Exception as e:
             log.warning("Watcher: skipped %s: %s", path, e)
 
@@ -817,12 +1075,12 @@ class VaultEventHandler(FileSystemEventHandler):
 
     def on_deleted(self, event):
         if not event.is_directory and event.src_path.endswith(".md") and not _should_skip_path(Path(event.src_path)):
-            delete_note(event.src_path)
+            _safe_delete_note(event.src_path)
 
     def on_moved(self, event):
         if not event.is_directory:
             if event.src_path.endswith(".md") and not _should_skip_path(Path(event.src_path)):
-                delete_note(event.src_path)
+                _safe_delete_note(event.src_path)
             self._schedule(event.dest_path)
 
 
@@ -1511,11 +1769,28 @@ async def call_tool(name: str, arguments: dict):
                 text="No vault configured. Set OBSIDIAN_VAULTS or OBSIDIAN_VAULT.",
             )]
 
+        # Acquired here (synchronously, on the tool-call coroutine) so we can
+        # report busy immediately; released inside the background thread once
+        # indexing finishes — the acquiring and releasing call sites are
+        # deliberately on different threads, see reindex_lock()'s docstring.
+        lock_cm = reindex_lock()
+        acquired = lock_cm.__enter__()
+        if not acquired:
+            lock_cm.__exit__(None, None, None)
+            return [TextContent(
+                type="text",
+                text="Re-index already in progress (held by another process or container). "
+                     "Use list_indexed_notes to check its progress.",
+            )]
+
         _search_cache.invalidate()
 
         def _reindex_all():
-            for vp in VAULT_PATHS:
-                index_vault(vp)
+            try:
+                for vp in VAULT_PATHS:
+                    index_vault(vp)
+            finally:
+                lock_cm.__exit__(None, None, None)
 
         threading.Thread(target=_reindex_all, daemon=True).start()
 

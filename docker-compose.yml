@@ -133,6 +133,16 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       EMBEDDING_MODEL: nomic-embed-text
       DASHBOARD_PORT: ${DASHBOARD_PORT:-8484}
+      # The dashboard binds 127.0.0.1 by default (see src/dashboard.py). Inside
+      # the container that loopback is the container's own, not the host's, so
+      # it must bind 0.0.0.0 here — the `ports:` mapping below already
+      # restricts host-side exposure to 127.0.0.1.
+      DASHBOARD_BIND: "0.0.0.0"
+      # Bearer token for the dashboard's mutating endpoints. Optional: if
+      # unset, a token is generated inside the container's own (ephemeral)
+      # filesystem on first run — set it in .env for a stable token across
+      # container recreates. See .env.example.
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:-}
     volumes:
       - ${OBSIDIAN_VAULT:-.}:/vault:ro
       # - /path/to/vault2:/vault2:ro  # add for multi-vault

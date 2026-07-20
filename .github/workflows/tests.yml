@@ -11,6 +11,26 @@ jobs:
   unit-tests:
     runs-on: ubuntu-latest
 
+    # Backs the `pg`-marked tests (advisory lock, index state, migrations,
+    # dimension migration — see docs/PLAN-security-correctness.md). Image
+    # matches the pin in docker-compose.yml's postgres service. The
+    # database name ends in `_test` to satisfy the pg fixture's safety
+    # guard in tests/conftest.py (_require_test_database_name).
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: obsidian_brain_test
+          POSTGRES_USER: obsidian
+          POSTGRES_PASSWORD: obsidian_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U obsidian -d obsidian_brain_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -26,10 +46,11 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Run unit tests
+      - name: Run unit tests (including pg-marked, against the postgres service)
         run: uv run pytest -q --tb=short
         env:
           OBSIDIAN_VAULT: /tmp/test-vault
+          PYTEST_DATABASE_URL: postgresql://obsidian:obsidian_test_password@localhost:5432/obsidian_brain_test
 
       - name: SAST scan
         run: uv run shipguard scan . --format terminal

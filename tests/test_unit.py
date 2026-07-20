@@ -988,6 +988,35 @@ class TestDockerComposeOllamaModelPull:
 
 # ── index_vault failure tracking + retry ─────────────────────────────────────
 
+def _fake_index_state_store():
+    """In-memory stand-in for the index_state table (see iteration 6 of
+    docs/PLAN-security-correctness.md), returned as a (set_fn, get_fn) pair
+    with the same signatures as server.set_index_state/get_index_state.
+
+    get_last_rebuild_failures() now reads from Postgres via
+    server.get_index_state() instead of an in-process module-global list —
+    without this fake, these tests would exercise the real DB-unreachable
+    fallback path (an empty list, always) rather than the failure-tracking
+    behavior they're named for.
+    """
+    store: dict[str, dict] = {}
+
+    def fake_set(vault_id, status, *, failed_paths=None, error=None):
+        store[vault_id] = {
+            "vault_id": vault_id,
+            "status": status,
+            "failed_paths": list(failed_paths or []),
+            "error": error,
+        }
+
+    def fake_get(vault_id=None):
+        if vault_id is not None:
+            return store.get(vault_id)
+        return list(store.values())
+
+    return fake_set, fake_get
+
+
 class TestIndexVaultFailureTracking:
     """index_vault must retry transient embed failures once and surface
     persistent failures via get_last_rebuild_failures(), so a wedged Ollama
@@ -1007,6 +1036,9 @@ class TestIndexVaultFailureTracking:
             if attempts[path] == 1:
                 raise RuntimeError("simulated ollama timeout")
 
+        fake_set, fake_get = _fake_index_state_store()
+        monkeypatch.setattr(server, "set_index_state", fake_set)
+        monkeypatch.setattr(server, "get_index_state", fake_get)
         monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
         monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
         monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
@@ -1032,6 +1064,9 @@ class TestIndexVaultFailureTracking:
         def always_fail(path, content, hash_, vault):
             raise RuntimeError("ollama unreachable")
 
+        fake_set, fake_get = _fake_index_state_store()
+        monkeypatch.setattr(server, "set_index_state", fake_set)
+        monkeypatch.setattr(server, "get_index_state", fake_get)
         monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
         monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
         monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})

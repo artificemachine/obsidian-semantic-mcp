@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "obsidian-semantic-mcp"
-version = "0.14.6"
+version = "0.15.0"
 description = "Semantic search MCP server for Obsidian vaults"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -21,12 +21,10 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "mcp==1.26.0",
+    "mcp==1.28.1",
     "psycopg2-binary==2.9.11",
     "watchdog==6.0.0",
     "requests==2.32.5",
-    "uvicorn==0.41.0",
-    "starlette==0.52.1",
     "pyjwt==2.12.1",
     "httpx==0.28.1",
     "python-dotenv==1.2.2",
@@ -53,9 +51,7 @@ packages = ["src"]
 "docker-compose.yml" = "docker-compose.yml"
 
 [tool.pytest.ini_options]
-testpaths = [
-    "tests/test_unit.py",
-    "tests/test_osm_init.py",
-    "tests/test_osm_commands.py",
-    "tests/test_dashboard_smoke.py",
+testpaths = ["tests"]
+markers = [
+    "pg: requires a live PostgreSQL *_test database (see tests/conftest.py pg fixture); excluded by `-m \"not pg\"`",
 ]

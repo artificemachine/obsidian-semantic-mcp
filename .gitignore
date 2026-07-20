@@ -25,6 +25,10 @@ Thumbs.db
 # Environment
 .env
 .env.*
+# ...but the template MUST ship: `.env.*` above silently swallowed it, so no
+# cloner ever received the file the README tells them to copy. Placeholders
+# only — never put a real value in here.
+!.env.example
 
 # Secrets / certificates
 *.key
@@ -57,3 +61,6 @@ nul
 # /to-agents backup files (rule file edits preserve via git history; backups are off-tree)
 .backups/
 *.bak-to-agents-*
+
+# pytest-cov output
+.coverage
