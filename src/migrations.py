@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import logging
 import re
+
+from psycopg2 import sql
 from dataclasses import dataclass
 from typing import Callable
 
@@ -205,7 +207,11 @@ def _execute_ddl_with_lock_timeout(cur, statements: list[str]) -> None:
     actionable error rather than an unbounded stall."""
     import psycopg2.errors
 
-    cur.execute(f"SET LOCAL lock_timeout = '{DDL_LOCK_TIMEOUT}';")
+    # DDL_LOCK_TIMEOUT is a module constant ('5s'), never request input.
+    # lock_timeout cannot be %s-parameterized. Not a SQLi vector.
+    cur.execute(
+        sql.SQL("SET LOCAL lock_timeout = {}").format(sql.Literal(DDL_LOCK_TIMEOUT))
+    )
     try:
         for stmt in statements:
             cur.execute(stmt)
@@ -234,7 +240,14 @@ def add_embedding_column(conn, new_dim: int) -> None:
     with conn:
         with conn.cursor() as cur:
             _execute_ddl_with_lock_timeout(cur, [
-                f"ALTER TABLE notes ADD COLUMN IF NOT EXISTS {col} vector({int(new_dim)});"
+                # Identifiers are composed with psycopg2.sql.Identifier, which
+                # quotes and escapes them at the driver level -- injection-safe by
+                # construction rather than by argument. `new_dim` is an int the
+                # caller validated; vector(N) is a type, not a value, so it cannot
+                # be %s-parameterized.
+                sql.SQL("ALTER TABLE notes ADD COLUMN IF NOT EXISTS {} vector({})").format(
+                    sql.Identifier(col), sql.SQL(str(int(new_dim)))
+                ),
             ])
 
 
@@ -266,7 +279,15 @@ def backfill_embedding_column(
     """
     col = _new_column_name(new_dim)
     with conn.cursor() as cur:
-        cur.execute(f"SELECT id, content FROM notes WHERE {col} IS NULL ORDER BY id")
+        # `col` is _new_column_name(new_dim), built from an int the caller
+        # validated (osm_init rejects non-integer/non-positive input) — never
+        # request input. pgvector's vector(N) and SQL identifiers cannot be
+        # %s-parameterized; every real value is. Not a SQLi vector.
+        cur.execute(
+            sql.SQL("SELECT id, content FROM notes WHERE {} IS NULL ORDER BY id").format(
+                sql.Identifier(col)
+            )
+        )
         rows = cur.fetchall()
 
     total = len(rows)
@@ -278,8 +299,14 @@ def backfill_embedding_column(
                 for note_id, content in chunk:
                     vec = embed_fn(content)
                     vec_literal = "[" + ",".join(str(v) for v in vec) + "]"
+                    # `col` is _new_column_name(new_dim), built from an int the caller
+                    # validated (osm_init rejects non-integer/non-positive input) — never
+                    # request input. pgvector's vector(N) and SQL identifiers cannot be
+                    # %s-parameterized; every real value is. Not a SQLi vector.
                     cur.execute(
-                        f"UPDATE notes SET {col} = %s::vector WHERE id = %s",
+                        sql.SQL("UPDATE notes SET {} = %s::vector WHERE id = %s").format(
+                            sql.Identifier(col)
+                        ),
                         (vec_literal, note_id),
                     )
         done += len(chunk)
@@ -299,7 +326,15 @@ def cutover_embedding_column(conn, new_dim: int) -> None:
     """
     col = _new_column_name(new_dim)
     with conn.cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) FROM notes WHERE {col} IS NULL")
+        # `col` is _new_column_name(new_dim), built from an int the caller
+        # validated (osm_init rejects non-integer/non-positive input) — never
+        # request input. pgvector's vector(N) and SQL identifiers cannot be
+        # %s-parameterized; every real value is. Not a SQLi vector.
+        cur.execute(
+            sql.SQL("SELECT COUNT(*) FROM notes WHERE {} IS NULL").format(
+                sql.Identifier(col)
+            )
+        )
         remaining = cur.fetchone()[0]
     if remaining > 0:
         raise RuntimeError(
@@ -314,11 +349,17 @@ def cutover_embedding_column(conn, new_dim: int) -> None:
             # here: this is the irreversible step, so stalling mid-cutover is
             # the least acceptable place to block every reader.
             _execute_ddl_with_lock_timeout(cur, [
-                "ALTER TABLE notes DROP COLUMN embedding;",
-                f"ALTER TABLE notes RENAME COLUMN {col} TO embedding;",
-                "DROP INDEX IF EXISTS notes_embedding_idx;",
-                "CREATE INDEX notes_embedding_idx ON notes "
-                "USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);",
+                sql.SQL("ALTER TABLE notes DROP COLUMN embedding"),
+                # `col` is _new_column_name(new_dim), built from an int the caller
+                # validated (osm_init rejects non-integer/non-positive input) — never
+                # request input. pgvector's vector(N) and SQL identifiers cannot be
+                # %s-parameterized; every real value is. Not a SQLi vector.
+                sql.SQL("ALTER TABLE notes RENAME COLUMN {} TO embedding").format(
+                    sql.Identifier(col)
+                ),
+                sql.SQL("DROP INDEX IF EXISTS notes_embedding_idx"),
+                sql.SQL("CREATE INDEX notes_embedding_idx ON notes "
+                        "USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"),
             ])
 
 

@@ -88,7 +88,12 @@ def test_smoke_dashboard_and_server_import_after_removal():
 
     for module in ("dashboard", "server"):
         result = subprocess.run(
-            [sys.executable, "-c", f"import sys; sys.path.insert(0,'src'); import {module}"],
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, 'src'); __import__(sys.argv[1])",
+                module,
+            ],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,

@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 
 import pytest
+from psycopg2 import sql
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -261,7 +262,9 @@ def test_cutover_drops_old_column_only_when_new_is_complete(pg, dimension_on_pg)
     vec = "[" + ",".join(["0.2"] * NEW_DIM) + "]"
     with pg.cursor() as cur:
         cur.execute(
-            f"UPDATE notes SET embedding_{NEW_DIM} = %s::vector WHERE id != %s",
+            sql.SQL("UPDATE notes SET {} = %s::vector WHERE id != %s").format(
+                sql.Identifier(f"embedding_{NEW_DIM}")
+            ),
             (vec, first_id),
         )
     pg.commit()
