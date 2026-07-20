@@ -67,17 +67,23 @@ def _have_postgres() -> bool:
         return False
 
 
-@pytest.mark.skipif(
-    not _have_postgres(),
-    reason="postgres not reachable; integration test requires a DB",
-)
+@pytest.mark.pg
 def test_initialize_responds_over_anonymous_pipe(tmp_path):
     """Reproduce the May 8 stdin hang: spawn server with pipe stdin/stdout,
     write `initialize`, do NOT close stdin, expect response within 20s.
 
     This test is the canonical RED case for the bug. It will fail until
     the stdin reader is converted to a non-blocking thread offload.
+
+    Marked `pg`: spawns a real server subprocess that opens a live Postgres
+    connection pool. The `_have_postgres()` liveness probe itself makes a
+    TCP connection, so it must never run during collection or during a
+    `-m "not pg"` run — it is called here, inside the test body, only when
+    this test is actually selected to execute.
     """
+    if not _have_postgres():
+        pytest.skip("postgres not reachable; integration test requires a DB")
+
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "hello.md").write_text("# hello\n")

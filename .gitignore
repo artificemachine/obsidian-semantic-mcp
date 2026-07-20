@@ -57,3 +57,6 @@ nul
 # /to-agents backup files (rule file edits preserve via git history; backups are off-tree)
 .backups/
 *.bak-to-agents-*
+
+# pytest-cov output
+.coverage
