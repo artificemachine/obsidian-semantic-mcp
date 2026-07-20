@@ -769,3 +769,27 @@ Requires `PYTEST_DATABASE_URL` pointing at a `*_test` database. Without one, app
 ## 7. Open questions
 
 None. The three questions raised at drafting were resolved into the plan: token persistence (iteration 2 — `~/.config/`, not `.env`), `pg` tests in CI (iteration 5 — yes, with a `postgres` service and a `*_test` database guard), and dimension-migration triggering (iteration 8 — operator-run `osm migrate`, never automatic on boot).
+
+---
+
+## Build outcome — 2026-07-20
+
+**Shipped:** all 9 iterations (0-8), on branch `feat/security-correctness`, in 3 commits:
+- `92f69ff` test(collection) — iteration 0, plus the conftest config-dir fence and the `pg_dsn` fix
+- `e2a5304` chore(deps) — iteration 4
+- `86b98b7` feat(security) — iterations 1-3, 5-8
+
+Suite: **408 passed, 30 skipped** (bare `pytest`, which is what the pre-commit hook runs). Coverage 48% → 51%.
+
+**Deviations from plan:**
+- **Not 9 commits.** `src/server.py` carries iterations 3, 5, 6, 7 and 8; `src/config.py`/`src/dashboard.py` carry 1, 2 and parts of 5, 6, 8. Per-iteration commits would have required patch-level staging and produced intermediate commits with failing tests. Collapsed to 3 coherent commits, each green on its own.
+- **`CLAUDE.md` line not fixed.** Guardrail-blocked (protected instruction file). Still outstanding — and note the correction below means the accurate wording is `http.server`, not Starlette.
+- **Token resolution made lazy**, which the plan did not specify. As written it resolved at import, so importing the module wrote a secret to the real config dir; test collection triggered exactly that during the build.
+- **`pg_dsn()` reads `PYTEST_DATABASE_URL` only.** The plan said "prefers" over `DATABASE_URL`; the implemented fallback contradicted its own docstring and would have connected to real data on any host whose database name ended in `_test`. It also broke the pre-commit hook by picking up another test module's placeholder DSN.
+- **Iteration 7 DDL split:** `notes`' own `CREATE TABLE` stayed inline in `init_db()`, since a static migration list cannot parameterise `vector(N)` with a dimension only known after probing Ollama at runtime. Migration 1 covers `note_links` + the two indexes; migration 2 covers `index_state`.
+
+**Learned:**
+- **The starlette/uvicorn finding in the audit was wrong.** Both are unconditional requirements of the `mcp` SDK. Removing our pins closes zero CVEs. Corrected in `docs/audits/2026-07-20-job-ready.md`; the real fix is `mcp` 1.26.0 → 1.28.1.
+- **The test suite had been writing to the real `~/.config/obsidian-semantic-mcp/` on every run**, long before this work: `PROJECT_ROOT_FILE` is derived from `OSM_CONFIG_DIR` at import, so repointing the directory alone does not move it. Content happened to be identical each time, which is why nobody noticed. A test crashing mid-`_with_root()` could have left the real `osm` launcher pointing at a deleted tmp_path.
+- **`test_stdin_pipe_response.py` opened a real TCP connection to the live Postgres container at *collection* time** — its `skipif` probe was a decorator argument, which evaluates on import. Any `skipif` doing I/O has this property.
+- **A safety guard that raises is worth more than one that skips.** The `*_test` database guard is what surfaced the `DATABASE_URL` fallback bug; had it skipped quietly, the fallback would have shipped.
