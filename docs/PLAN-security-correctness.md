@@ -793,3 +793,21 @@ Suite: **408 passed, 30 skipped** (bare `pytest`, which is what the pre-commit h
 - **The test suite had been writing to the real `~/.config/obsidian-semantic-mcp/` on every run**, long before this work: `PROJECT_ROOT_FILE` is derived from `OSM_CONFIG_DIR` at import, so repointing the directory alone does not move it. Content happened to be identical each time, which is why nobody noticed. A test crashing mid-`_with_root()` could have left the real `osm` launcher pointing at a deleted tmp_path.
 - **`test_stdin_pipe_response.py` opened a real TCP connection to the live Postgres container at *collection* time** — its `skipif` probe was a decorator argument, which evaluates on import. Any `skipif` doing I/O has this property.
 - **A safety guard that raises is worth more than one that skips.** The `*_test` database guard is what surfaced the `DATABASE_URL` fallback bug; had it skipped quietly, the fallback would have shipped.
+
+## Build outcome addendum — 2026-07-20 (pg suite executed)
+
+The 30 `pg` tests deferred above were run against a real Postgres for the first time. **32 passed, 12.6s** (`8c22e46`), but only after two 10-minute hangs exposed two production bugs neither mocks nor the non-pg suite could reach.
+
+**Setup:** `obsidian_brain_test` created inside the running `obsidian-semantic-mcp-postgres-1` container; `PYTEST_DATABASE_URL=postgresql://obsidian:***@127.0.0.1:5433/obsidian_brain_test`. Real `obsidian_brain` untouched throughout (verified: 1498 notes before and after).
+
+**Bug 1 — unbounded DDL lock waits (the serious one).** `ALTER TABLE` takes ACCESS EXCLUSIVE on `notes`. With no `lock_timeout`, it waits forever behind any open reader transaction, and every reader arriving afterwards queues behind the blocked ALTER. A migration that merely blocks therefore takes the entire table offline.
+
+This **falsifies iteration 8's acceptance criterion** "Search returns results at every point during a migration" — true only when nobody is searching, which is not the interesting case.
+
+The worse site was not the migration path but `init_db()`, which issues `ALTER TABLE` on **every boot**: starting the MCP server while the dashboard held a search transaction could stall startup indefinitely and cascade into full table unavailability. Both sites now `SET LOCAL lock_timeout = '5s'` and raise an actionable error.
+
+**Bug 2 — a vanished vault reported success.** `index_vault()` called `Path.rglob` on the vault root, which yields nothing rather than raising when the directory is absent. An unmounted NAS, deleted folder, or typo'd `OBSIDIAN_VAULT` indexed zero notes and recorded `status='idle'`. That is the exact silent-failure mode `index_state` was introduced to expose, sitting one layer below where the audit found it.
+
+**Also fixed:** the `pg` fixture is now autocommit. A test that only `SELECT`ed sat `idle in transaction` holding ACCESS SHARE, deadlocking against code-under-test that opened its own connection via `db_conn()`.
+
+**Learned:** the value of these tests was not in what they asserted but in what running them at all revealed. Both bugs are invisible to a mock — one needs a real lock manager, the other a real filesystem — and both sat in code that had already passed review, a full non-pg suite, and a pre-commit hook. The decision in iteration 5 to run `pg` tests in CI rather than locally-when-remembered is what keeps this from regressing.
