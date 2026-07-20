@@ -152,7 +152,21 @@ def pg():
         pytest.skip("no PYTEST_DATABASE_URL/DATABASE_URL configured for pg tests")
     _require_test_database_name(dsn)
     conn = psycopg2.connect(dsn)
+    # Autocommit so a test that only SELECTs does not sit `idle in
+    # transaction` holding ACCESS SHARE on `notes`. Without this, any test
+    # whose code-under-test opens its own connection (db_conn(), which is a
+    # DIFFERENT connection) and issues ALTER TABLE deadlocks against this
+    # fixture's own open read transaction — the suite hung for 10 minutes
+    # twice on 2026-07-20 before this was understood.
+    #
+    # Tests needing explicit transaction control set conn.autocommit = False
+    # locally; the `with conn:` blocks in migrations.py manage their own.
+    conn.autocommit = True
     try:
         yield conn
     finally:
+        try:
+            conn.rollback()  # discard anything a test left open
+        except Exception:
+            pass
         conn.close()

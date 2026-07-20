@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -390,3 +391,39 @@ def test_migration_reports_progress_within_interval(pg, dimension_on_pg):
         assert done - prev <= 100, f"gap of {done - prev} notes between progress reports"
         prev = done
     assert prev == 125  # 5 seeded in dimension_on_pg + 120 bulk-inserted here
+
+
+@pytest.mark.pg
+def test_add_column_times_out_instead_of_stalling_behind_a_reader(pg, dimension_on_pg):
+    """Regression: ALTER TABLE needs ACCESS EXCLUSIVE, so an open reader
+    transaction blocks it — and every later reader then queues behind the
+    blocked ALTER, taking the table down. Found 2026-07-20 by this suite
+    deadlocking for 10 minutes against a real Postgres.
+
+    A second connection holds an idle-in-transaction SELECT on `notes`;
+    add_embedding_column must give up within DDL_LOCK_TIMEOUT and raise a
+    clear error, not wait forever.
+    """
+    import psycopg2
+    from conftest import pg_dsn
+
+    blocker = psycopg2.connect(pg_dsn())
+    try:
+        with blocker.cursor() as bcur:
+            bcur.execute("SELECT COUNT(*) FROM notes")  # opens a txn, holds ACCESS SHARE
+            bcur.fetchone()
+
+        started = time.monotonic()
+        with pytest.raises(RuntimeError, match="Could not acquire the table lock"):
+            migrations.add_embedding_column(pg, NEW_DIM)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 30, f"gave up after {elapsed:.1f}s — should bound at DDL_LOCK_TIMEOUT"
+
+        # The old column and its data must be untouched by the failed attempt.
+        with pg.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM notes WHERE embedding IS NOT NULL")
+            assert cur.fetchone()[0] > 0
+    finally:
+        blocker.rollback()
+        blocker.close()

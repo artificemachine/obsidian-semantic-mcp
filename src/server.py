@@ -344,6 +344,18 @@ def init_db(embed_dim: int = 768) -> None:
     with db_conn() as conn:
         with conn:
             with conn.cursor() as cur:
+                # init_db runs on EVERY boot and issues ALTER TABLE, which needs
+                # ACCESS EXCLUSIVE on `notes`. Unbounded, a single open reader
+                # transaction (a dashboard search, an MCP query, a psql session
+                # left idle in transaction) stalls startup indefinitely — and
+                # every reader arriving after the blocked ALTER queues behind
+                # it, so a slow boot escalates into a fully unavailable table.
+                #
+                # Observed 2026-07-20 against a real Postgres: `ALTER TABLE
+                # notes ADD COLUMN IF NOT EXISTS content_tsv` blocked behind an
+                # idle-in-transaction SELECT until the process was killed.
+                # Bound the wait so boot fails fast and visibly instead.
+                cur.execute("SET LOCAL lock_timeout = '5s';")
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
                 # embed_dim is an int from the embedding model config, never request
                 # input, and pgvector's vector(N) type doesn't accept a %s parameter
@@ -936,6 +948,15 @@ def index_vault(vault: str) -> None:
     set_index_state(vault, "indexing")
     try:
         root = Path(vault)
+        # rglob on a nonexistent directory yields nothing rather than raising,
+        # so without this check a vault that vanished (unmounted NAS, deleted
+        # folder, typo'd OBSIDIAN_VAULT) indexes zero notes and reports
+        # SUCCESS — the exact silent-failure mode index_state exists to make
+        # visible. Fail loudly instead so the except branch records it.
+        if not root.is_dir():
+            raise FileNotFoundError(
+                f"Vault path does not exist or is not a directory: {vault}"
+            )
         md_files = [f for f in root.rglob("*.md") if not _should_skip_path(f)]
         log.info("Indexing %d notes in %s…", len(md_files), vault)
 

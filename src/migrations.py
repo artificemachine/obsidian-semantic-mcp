@@ -183,6 +183,42 @@ def _new_column_name(new_dim: int) -> str:
     return f"embedding_{int(new_dim)}"
 
 
+# ALTER TABLE takes ACCESS EXCLUSIVE on `notes`. Without a bound, it waits
+# indefinitely behind any open reader transaction — and while it waits, every
+# subsequent reader queues behind IT, so a migration that merely blocks takes
+# the whole table down with it. That is the opposite of this migration's
+# stated guarantee that search stays available throughout.
+#
+# Observed 2026-07-20 running the pg suite against a real Postgres: a test
+# holding an idle-in-transaction SELECT on `notes` stalled ADD COLUMN until
+# the run was killed 10 minutes later. Mocks cannot reproduce this; only a
+# real lock manager can.
+#
+# 5s is chosen to be longer than any healthy search transaction and far
+# shorter than a human's patience. On timeout the DDL raises LockNotAvailable
+# and the migration aborts cleanly, leaving the old column authoritative.
+DDL_LOCK_TIMEOUT = "5s"
+
+
+def _execute_ddl_with_lock_timeout(cur, statements: list[str]) -> None:
+    """Run DDL under a bounded lock wait, converting a timeout into a clear,
+    actionable error rather than an unbounded stall."""
+    import psycopg2.errors
+
+    cur.execute(f"SET LOCAL lock_timeout = '{DDL_LOCK_TIMEOUT}';")
+    try:
+        for stmt in statements:
+            cur.execute(stmt)
+    except psycopg2.errors.LockNotAvailable as e:
+        raise RuntimeError(
+            f"Could not acquire the table lock within {DDL_LOCK_TIMEOUT} — another "
+            "connection is holding an open transaction on `notes` (a long-running "
+            "search, or a session left idle in transaction). No changes were made "
+            "and the existing embedding column is untouched. Stop the dashboard "
+            "and MCP server, or wait for the reader to finish, then re-run."
+        ) from e
+
+
 def add_embedding_column(conn, new_dim: int) -> None:
     """ADD COLUMN embedding_<new_dim> vector(new_dim), IF NOT EXISTS.
 
@@ -197,7 +233,9 @@ def add_embedding_column(conn, new_dim: int) -> None:
     # %s parameter for its dimension — DDL, not a SQLi vector.
     with conn:
         with conn.cursor() as cur:
-            cur.execute(f"ALTER TABLE notes ADD COLUMN IF NOT EXISTS {col} vector({int(new_dim)});")
+            _execute_ddl_with_lock_timeout(cur, [
+                f"ALTER TABLE notes ADD COLUMN IF NOT EXISTS {col} vector({int(new_dim)});"
+            ])
 
 
 def backfill_embedding_column(
@@ -272,13 +310,16 @@ def cutover_embedding_column(conn, new_dim: int) -> None:
 
     with conn:
         with conn.cursor() as cur:
-            cur.execute("ALTER TABLE notes DROP COLUMN embedding;")
-            cur.execute(f"ALTER TABLE notes RENAME COLUMN {col} TO embedding;")
-            cur.execute("DROP INDEX IF EXISTS notes_embedding_idx;")
-            cur.execute(
+            # Same ACCESS EXCLUSIVE hazard as add_embedding_column, and worse
+            # here: this is the irreversible step, so stalling mid-cutover is
+            # the least acceptable place to block every reader.
+            _execute_ddl_with_lock_timeout(cur, [
+                "ALTER TABLE notes DROP COLUMN embedding;",
+                f"ALTER TABLE notes RENAME COLUMN {col} TO embedding;",
+                "DROP INDEX IF EXISTS notes_embedding_idx;",
                 "CREATE INDEX notes_embedding_idx ON notes "
-                "USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);"
-            )
+                "USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);",
+            ])
 
 
 def migrate_embedding_dimension(
