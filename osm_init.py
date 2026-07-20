@@ -2338,6 +2338,91 @@ def cmd_rebuild():
     info("Dashboard:  http://localhost:8484")
 
 
+# ── Migrate command ───────────────────────────────────────────────────────────
+#
+# Operator-triggered, non-destructive embedding-dimension migration (see
+# docs/PLAN-security-correctness.md iteration 8, docs/RUNBOOK.md). This is
+# the only command in `osm` that can rewrite `notes.embedding` data — it
+# never runs automatically (init_db only *detects* a mismatch and records
+# `dimension_mismatch` in index_state; see src/server.py and
+# src/migrations.py's migrate_embedding_dimension / add_embedding_column /
+# backfill_embedding_column / cutover_embedding_column).
+
+
+def cmd_migrate():
+    header("OSM Migrate — embedding dimension")
+    hr()
+
+    new_dim_raw = _PARAMS.get("embedding_dim")
+    if not new_dim_raw:
+        fail("osm migrate requires --embedding-dim <N> (the new model's output dimension)")
+        info("Example: osm migrate --embedding-dim 1024")
+        sys.exit(1)
+    try:
+        new_dim = int(new_dim_raw)
+    except ValueError:
+        fail(f"--embedding-dim must be an integer, got {new_dim_raw!r}")
+        sys.exit(1)
+    if new_dim <= 0:
+        fail(f"--embedding-dim must be positive, got {new_dim}")
+        sys.exit(1)
+
+    info(f"Target dimension: vector({new_dim})")
+    info("Adds a new column, backfills it, and only drops the old column")
+    info("once every row is backfilled. Search stays available throughout.")
+    print()
+
+    if DRY_RUN:
+        info("Dry run — reporting the plan only, no changes will be made.")
+        _run_migration_snippet(new_dim, dry_run=True)
+        return
+
+    if not confirm(
+        f"Re-embed every note into vector({new_dim})? This can take a long "
+        f"time on CPU-only Ollama for a large vault.",
+        default="n",
+    ):
+        info("Cancelled.")
+        return
+
+    result = _run_migration_snippet(new_dim, dry_run=False)
+    if result is None or result.returncode != 0:
+        fail("Migration failed or could not run — the old embedding column and data are untouched.")
+        info("Re-run `osm migrate --embedding-dim N --dry-run` to inspect the plan, or check `osm status`.")
+        sys.exit(1)
+    ok(f"Migration to vector({new_dim}) complete.")
+
+
+def _run_migration_snippet(new_dim: int, *, dry_run: bool):
+    """Delegate the actual migration to the running mcp-server container,
+    which already has psycopg2, migrations.py, and the configured embed()
+    function available — mirrors the exec pattern used elsewhere in this
+    file (see register_pi_agent's docker compose exec -T mcp-server call).
+
+    UNVERIFIED against a live container by the agent that wrote this (see
+    the implementation report for docs/PLAN-security-correctness.md
+    iteration 8) — review this snippet carefully before relying on it
+    against real data. Native (non-Docker) installs are not yet wired; add
+    a branch here before shipping a native `osm migrate` path.
+    """
+    snippet = (
+        "import sys; sys.path.insert(0, '/app/src'); "
+        "import server, migrations; "
+        "server.init_db(server.get_embed_dim()); "
+        "conn = server._get_pool().getconn(); "
+        "acquired = False; "
+        "try:\n"
+        f"    result = migrations.migrate_embedding_dimension(conn, None, {new_dim}, server.embed, dry_run={dry_run!r}); "
+        "    print(result)\n"
+        "finally:\n"
+        "    server._get_pool().putconn(conn)\n"
+    )
+    return compose(
+        ["exec", "-T", "mcp-server", "python3", "-c", snippet],
+        check=False,
+    )
+
+
 # ── Version command ───────────────────────────────────────────────────────────
 
 _GITHUB_REPO = "artificemachine/obsidian-semantic-mcp"
@@ -2754,6 +2839,8 @@ def cmd_help():
     print(f"    osm vaults                                  # List configured vault(s)")
     print(f"    osm tunnel                                  # Reconnect SSH tunnel")
     print(f"    osm rebuild                                 # Rebuild Docker images")
+    print(f"    osm migrate --embedding-dim 1024            # Non-destructive dimension migration")
+    print(f"    osm migrate --embedding-dim 1024 --dry-run  # Preview the migration plan only")
     print(f"    osm update                                  # Pull latest images and restart")
     print(f"    osm version                                 # Show version and check for updates")
     print(
@@ -2771,6 +2858,7 @@ COMMANDS = {
     "dashboard": (cmd_dashboard, "Open monitoring dashboard in browser"),
     "tunnel": (cmd_tunnel, "Reconnect SSH tunnel to remote Ollama host"),
     "rebuild": (cmd_rebuild, "Rebuild Docker images and restart"),
+    "migrate": (cmd_migrate, "Non-destructive embedding-dimension migration (--embedding-dim N)"),
     "update": (cmd_update, "Pull latest Docker images and restart services"),
     "version": (cmd_version, "Show installed version and check for updates"),
     "remove": (cmd_remove, "Stop services, delete volumes and config"),
@@ -2795,6 +2883,7 @@ _FLAG_MAP = {
     "vault-cifs-user": "vault_cifs_user",
     "vault-cifs-pass": "vault_cifs_pass",
     "yes": "yes",  # boolean — skip all confirms in remove
+    "embedding-dim": "embedding_dim",  # osm migrate — new model's output dimension
 }
 
 

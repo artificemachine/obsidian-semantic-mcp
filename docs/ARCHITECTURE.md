@@ -82,6 +82,34 @@ CREATE INDEX notes_embedding_idx
     WITH (lists = 100);
 ```
 
+`note_links` (wikilink graph), `index_state` (per-vault indexing status and
+failure tracking), and `schema_version` (see Schema Migrations below) are
+the other tables in the schema; their DDL lives in `src/migrations.py`
+rather than here.
+
+## Schema Migrations
+
+Schema changes run through an ordered, versioned, idempotent migration list
+in `src/migrations.py` — `MIGRATIONS: list[Migration]`, applied by
+`init_db()` via `migrations.apply_pending(conn)`. Each migration commits in
+its own transaction, immediately followed by its own `schema_version` stamp
+row (`version`, `name`, `applied_at`) in that same transaction, so a
+migration that fails leaves every earlier migration's effects and stamp
+intact rather than rolling back the whole batch.
+
+No Alembic: the dependency cost isn't justified at this table count — the
+finding this mechanism fixes was "no versioning," not "no framework."
+
+Migration 1 is a **baseline**: it creates `note_links` and the
+pre-existing `notes_vault_idx` / `notes_tsv_idx` indexes, `IF NOT EXISTS`
+throughout. On an established database (which already has these objects)
+it is a safe no-op that only stamps the version row — the database is
+stamped, not rebuilt. The `notes` table itself is deliberately **not**
+part of any migration: its `embedding` column dimension is a runtime value
+probed from the configured Ollama model, which a static migration list
+can't parameterize, so it stays inline in `init_db()`, created before
+`apply_pending()` runs.
+
 ## Data Flow: Indexing
 
 ```

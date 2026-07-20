@@ -229,6 +229,39 @@ docker exec obsidian-semantic-mcp-postgres-1 pg_dump -U obsidian obsidian_brain 
 docker exec -i obsidian-semantic-mcp-postgres-1 psql -U obsidian obsidian_brain < backup.sql
 ```
 
+### Changing the embedding model / dimension
+
+**Symptom:** the dashboard (or `/api/stats`) reports `dimension_mismatch`,
+or the log shows `Embedding dimension mismatch: DB has vector(N) but
+<model> produces M`.
+
+**Cause:** `EMBEDDING_MODEL` was changed to a model with a different output
+dimension than what's already stored in `notes.embedding`. On boot,
+`init_db()` **detects** this and records it — it never migrates
+automatically, and a container restart can never begin the re-embed on its
+own. The old column and old model stay authoritative and search keeps
+working exactly as before; nothing is degraded by leaving it unmigrated.
+
+**Fix — non-destructive, no `docker compose down -v` required:**
+
+```bash
+# 1. Preview the plan first — reports the row count to re-embed, writes nothing.
+osm migrate --embedding-dim <N> --dry-run
+
+# 2. Run it for real. Can take a long time on CPU-only Ollama for a large
+#    vault — search stays available throughout (the old column is only
+#    dropped in the final cutover step, once every row is backfilled).
+osm migrate --embedding-dim <N>
+```
+
+If Ollama becomes unreachable mid-migration, the migration fails loudly and
+the **old** column and all its data are left untouched — re-run
+`osm migrate --embedding-dim <N>` once Ollama is back; it resumes rather
+than re-embedding notes that already succeeded.
+
+Verify: `osm status` / the dashboard should stop reporting
+`dimension_mismatch` once the migration completes.
+
 ## Resource Limits
 
 | Service | Memory limit | Expected usage |
