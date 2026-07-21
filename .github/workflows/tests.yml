@@ -47,7 +47,7 @@ jobs:
         run: uv sync
 
       - name: Run unit tests (including pg-marked, against the postgres service)
-        run: uv run pytest -q --tb=short
+        run: uv run pytest -q --tb=short --cov=src --cov-report=xml --cov-report=term
         env:
           OBSIDIAN_VAULT: /tmp/test-vault
           PYTEST_DATABASE_URL: postgresql://obsidian:obsidian_test_password@localhost:5432/obsidian_brain_test

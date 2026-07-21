@@ -95,7 +95,7 @@ class TestEmbedConcurrencyDefaults:
     active slot, exceed the 15s timeout, and the exponential-backoff retry
     resubmits at the same concurrency — a self-reinforcing thrash loop observed
     live: the ollama container pegged at 949-1223% CPU for 14h40m during a full
-    vault reindex (see handoff-osm.md). Defaults must be conservative enough for
+    vault reindex (see the reindex design notes). Defaults must be conservative enough for
     a single-slot CPU server; env overrides remain available for GPU/multi-slot
     deployments.
     """

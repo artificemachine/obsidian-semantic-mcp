@@ -22,7 +22,7 @@ Two underlying issues account for all four failures.
 
 **Evidence:**
 - `MCP_DOCKER`: `Server stderr: docker: unknown command: docker mcp`
-- `obsidian-semantic`: `Cannot connect to the Docker daemon at unix:///Users/airm2max/.orbstack/run/docker.sock. Is the docker daemon running?`
+- `obsidian-semantic`: `Cannot connect to the Docker daemon at unix://$HOME/.orbstack/run/docker.sock. Is the docker daemon running?`
 
 **State now:**
 - `docker ps` → daemon unreachable (OrbStack not started)
