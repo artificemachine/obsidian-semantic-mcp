@@ -64,3 +64,6 @@ nul
 
 # pytest-cov output
 .coverage
+
+# hablatone project marker (sibling of the already-ignored .voice-toolkit-project)
+.hablatone-project

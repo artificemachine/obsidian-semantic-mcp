@@ -1,3 +1,38 @@
+# Session Handoff — 2026-07-21 (security & correctness hardening: audit → plan → build → merge)
+Agent: Claude Code (Opus 4.8) | Branch: main | Tests: 439 pass, 0 skip (incl. 32 pg) / 408 pass, 31 skip (no DB) | COMMITTED, MERGED (PR #9)
+
+## What happened this session
+- Ran `/job-ready` full audit → `docs/audits/2026-07-20-job-ready.md` (verdict NOT READY, 3 hard gates). Progress tracker: `docs/audits/job-ready-progress.md`.
+- Wrote `docs/PLAN-security-correctness.md` (9 iterations, Stage 5+6 findings), executed all 9, merged as PR #9 → `main` at `ad95045`. Bumped 0.14.6 → **0.15.0**.
+- **Dashboard security** (`src/dashboard.py`, `src/config.py`): loopback bind default (`DASHBOARD_BIND`), bearer-token auth on all mutating endpoints (hmac.compare_digest), token at `~/.config/obsidian-semantic-mcp/dashboard_token` (0600), lazy-resolved so import no longer writes a secret. Stopped printing the DSN.
+- **Watchdog** (`src/server.py`): `_safe_delete_note` guards `on_deleted`/`on_moved` — a DB outage no longer kills the observer thread.
+- **Cross-process lock** (`src/server.py` `reindex_lock()`): Postgres session-level advisory lock replaced the process-local `threading.Lock`; `reindex_vault` MCP tool now reports busy.
+- **Observability** (`index_state` table): indexing state moved off module globals, so the dashboard failure panel works across containers.
+- **Schema** (`src/migrations.py`): `schema_version` + ordered migrations; migration 1 baselines existing installs (stamp, not rebuild).
+- **Deps**: mcp 1.26→1.28.1, cryptography 46→49, urllib3, idna. Vulns 38→25, packages 12→8, no HIGH/CRITICAL left. Dropped unused starlette/uvicorn pins.
+- **`.env.example` now ships** — `.gitignore`'s `.env.*` had swallowed it (added `!.env.example`).
+- **Test infra**: `testpaths = ["tests"]` (was 4 named files → 19 tests never ran); `pg` marker + CI `postgres` service; conftest fences the real config dir + `pg_dsn` reads `PYTEST_DATABASE_URL` only.
+- **Two production bugs found by running pg tests against real Postgres** (invisible to mocks): (1) unbounded `ALTER TABLE` lock waits stalling all readers, worst in `init_db()` which runs every boot — now `lock_timeout='5s'`; (2) `index_vault` on a missing vault path reported success instead of failing — now raises.
+- **SAST**: 7 PY-007 findings from new f-string DDL → composed via `psycopg2.sql.Identifier`; `.shipguard.yml` unchanged (no exclusions added).
+- **`osm migrate` withheld** from the CLI (unregistered from COMMANDS): its Docker-exec path was never run against a live container, native path unwired. `migrations.py` logic ships and is covered. Test asserts it stays unreachable.
+- Corrected an audit error in the report: starlette/uvicorn are hard transitive deps of `mcp`, so removing our pins closed ZERO CVEs (the mcp bump did).
+
+## Next session — first moves
+1. **Decide the v0.15.0 release** (Rule 13 gap: manifest is 0.15.0 but NO tag, NO release). Tagging `v*` triggers `docker-hub.yml`, which PUBLISHES two public images (`newblacc/obsidian-semantic-mcp` + `-dashboard`) and moves `latest`. Two breaking changes to headline in release notes: dashboard now needs a bearer token (401s scripted `/api/reindex` callers), and native dashboard binds loopback (`DASHBOARD_BIND` to expose). Outward-facing — get explicit go before tagging.
+2. **Stages 1–3, recruiter-facing polish** (the actual job-hunting lever, still untouched): README has ZERO images in 642 lines — add a badge row + dashboard GIF; add `SECURITY.md`, `CODE_OF_CONDUCT.md`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/dependabot.yml`; fix stale README test count 230→332.
+3. **Git history hygiene** (Stage 2 cleanup plan in the audit): 47 commits on main have author email `refactor code` (unattributed on GitHub — reclaim via S3/S5, do NOT rewrite history), 14 tags without releases, 4 merged branches to delete.
+4. **`CLAUDE.md` line** (guardrail-blocked this session): still says "Starlette monitoring dashboard" — should be `http.server`. User must edit (protected file).
+5. **Verify `osm migrate` Docker-exec path** against a live container before ever re-registering the subcommand (flip `test_osm_migrate_subcommand_is_withheld_until_verified`).
+
+### Operational notes
+- **pg tests need a DB**: `PYTEST_DATABASE_URL=postgresql://obsidian:<pw>@127.0.0.1:5433/obsidian_brain_test uv run pytest -q`. Password in `.env` (`POSTGRES_PASSWORD`). Bare `pytest -q` = 408 pass, 31 skip (no DB).
+- **Test DB `obsidian_brain_test`** was created inside `obsidian-semantic-mcp-postgres-1` this session and left in place. `docker exec obsidian-semantic-mcp-postgres-1 psql -U obsidian -d obsidian_brain -c "DROP DATABASE obsidian_brain_test;"` to remove.
+- **Live stack**: containers `obsidian-semantic-mcp-{postgres,ollama,mcp-server,dashboard}-1` up, holding the REAL vault index (1498 notes, port 5433). Fence: never write the real `obsidian_brain` DB or the real `~/.config/obsidian-semantic-mcp/` from tests.
+- **Branch protection ON** for `main`: `unit-tests` required + strict, force-push/deletion blocked, admin enforcement OFF (solo merges allowed).
+- `.shipguard.yml`: `rule_config.PY-007.skip_paths` is INERT in shipguard 0.3.3 — use top-level `exclude_paths`. `uv lock --upgrade-package` no-ops against a `==` pin (edit the pin directly).
+
+---
+
 # obsidian-semantic-mcp — Session Handoff
 
 **Latest update:** 2026-07-06 — v0.13.1 released: mandatory write_file frontmatter + de-gated live-Ollama smoke test

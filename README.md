@@ -1,5 +1,10 @@
 # Obsidian Semantic MCP
 
+[![Tests](https://github.com/artificemachine/obsidian-semantic-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/artificemachine/obsidian-semantic-mcp/actions/workflows/tests.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![Docker Hub](https://img.shields.io/docker/v/newblacc/obsidian-semantic-mcp?label=docker&sort=semver)](https://hub.docker.com/r/newblacc/obsidian-semantic-mcp)
+
 A persistent memory layer for Claude Desktop — semantic search across your entire Obsidian vault using local embeddings and PostgreSQL + pgvector.
 
 ## The Problem
@@ -443,7 +448,7 @@ OBSIDIAN_VAULT="/path/to/your/vault" uv run python3 src/dashboard.py
 uv run pytest -q
 ```
 
-Runs 230 fast unit tests covering embedding, search, vault path safety, connection pool, dashboard stats, the osm CLI wizard, and CI governance.
+Runs 439 tests (408 without a database, plus 31 PostgreSQL integration tests gated behind a `pg` marker) covering embedding, search, vault path safety, connection pool, dashboard auth, cross-process locking, schema migrations, the osm CLI wizard, and CI governance.
 
 ### `test_dashboard_smoke.py` — Dashboard health checks (Docker stack)
 
