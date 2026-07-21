@@ -648,3 +648,40 @@ class TestRemoveCleansNamedVolumes:
             "must run docker volume rm on the named volume from the override"
         )
 
+
+
+# ── pi client opt-out (OSM_SKIP_PI) ───────────────────────────────────────────
+
+class TestPiEnabled:
+    """The niche `pi` MCP client is configured only when the pi binary is on
+    PATH and the user has not opted out. OSM_SKIP_PI lets a pi user run/record
+    a clean setup matching what the pi-less majority sees."""
+
+    def test_enabled_when_pi_present_and_no_optout(self, monkeypatch):
+        monkeypatch.delenv("OSM_SKIP_PI", raising=False)
+        with patch.object(osm_init, "cmd_exists", return_value=True):
+            assert osm_init._pi_enabled() is True
+
+    def test_disabled_when_pi_absent(self, monkeypatch):
+        monkeypatch.delenv("OSM_SKIP_PI", raising=False)
+        with patch.object(osm_init, "cmd_exists", return_value=False):
+            assert osm_init._pi_enabled() is False
+
+    def test_optout_wins_even_when_pi_present(self, monkeypatch):
+        with patch.object(osm_init, "cmd_exists", return_value=True):
+            for val in ("1", "true", "TRUE", "yes", " 1 "):
+                monkeypatch.setenv("OSM_SKIP_PI", val)
+                assert osm_init._pi_enabled() is False, f"OSM_SKIP_PI={val!r} should disable"
+
+    def test_empty_optout_does_not_disable(self, monkeypatch):
+        monkeypatch.setenv("OSM_SKIP_PI", "")
+        with patch.object(osm_init, "cmd_exists", return_value=True):
+            assert osm_init._pi_enabled() is True
+
+    def test_label_names_pi_only_when_enabled(self, monkeypatch):
+        monkeypatch.delenv("OSM_SKIP_PI", raising=False)
+        with patch.object(osm_init, "cmd_exists", return_value=True):
+            assert osm_init._mcp_clients_label().endswith(", pi")
+        monkeypatch.setenv("OSM_SKIP_PI", "1")
+        with patch.object(osm_init, "cmd_exists", return_value=True):
+            assert "pi" not in osm_init._mcp_clients_label().split(", ")
