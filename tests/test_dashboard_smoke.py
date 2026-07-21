@@ -266,8 +266,12 @@ class TestDashboardLive:
         assert "text/html" in r.headers.get("Content-Type", "")
 
     def test_unknown_post_path_returns_404(self):
+        # Since v0.15.0, do_POST calls _require_auth() before routing, so an
+        # unauth POST to any path returns 401 — auth-first is intentional design
+        # (no path enumeration without a token). 404 only reachable with a valid
+        # token; covered by tests/test_dashboard_security.py.
         r = requests.post(f"{DASHBOARD_URL}/api/does-not-exist", timeout=_TIMEOUT)
-        assert r.status_code == 404
+        assert r.status_code == 401
 
     def test_stats_response_time(self):
         """Stats must respond within 15s. The vault count cache (30s TTL) keeps
