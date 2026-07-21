@@ -1428,8 +1428,25 @@ def _docker_entry():
 
 
 def _native_entry(vault, db_url):
-    """MCP client config entry for local/native installs."""
-    return {"command": "obsidian-semantic-mcp", "args": [], "env": {}}
+    """MCP client config entry for local/native installs.
+
+    Unlike Docker mode (whose entry launches into a container that already
+    has its own env from docker-compose), a native install's launcher runs
+    the server in-process and has no `.env` file to fall back on — the MCP
+    client's own `env` dict is the only environment the process ever sees.
+
+    `vault` is a list of one or more paths (see prompt_vault()); mirrors
+    server.py's _parse_vault_paths() convention — OBSIDIAN_VAULTS
+    (comma-separated) for multi-vault, OBSIDIAN_VAULT for the single-vault
+    case.
+    """
+    vaults = [vault] if isinstance(vault, str) else list(vault)
+    env = {"DATABASE_URL": db_url}
+    if len(vaults) > 1:
+        env["OBSIDIAN_VAULTS"] = ",".join(vaults)
+    else:
+        env["OBSIDIAN_VAULT"] = vaults[0]
+    return {"command": "obsidian-semantic-mcp", "args": [], "env": env}
 
 
 # ── Docker compose helpers ────────────────────────────────────────────────────

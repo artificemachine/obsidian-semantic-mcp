@@ -311,8 +311,8 @@ class TestEntries:
 
     def test_native_entry_env_vars(self):
         entry = osm_init._native_entry("/vault", "postgresql://localhost/db")
-        assert "OBSIDIAN_VAULT" not in entry["env"]
-        assert entry["env"] == {}
+        assert entry["env"]["OBSIDIAN_VAULT"] == "/vault"
+        assert entry["env"]["DATABASE_URL"] == "postgresql://localhost/db"
 
 
 # ── update_claude_config ──────────────────────────────────────────────────────
