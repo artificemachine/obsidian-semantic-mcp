@@ -1,3 +1,5 @@
+> **Status: historical design record, not current-state documentation.** Iterations 1-3 and 5-8 shipped (dashboard auth, advisory locking, versioned migrations, `osm migrate --embedding-dim`). Kept for context and build outcome. For how the system works today see [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`README.md`](../README.md).
+
 # Implementation Plan — Security & Correctness Hardening (obsidian-semantic-mcp)
 
 **Status:** approved 2026-07-20. Input contract for `/plan-implement`.
