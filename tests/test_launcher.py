@@ -3,10 +3,7 @@ tests/test_launcher.py — unit tests for src/launcher.py
 
 All Docker and server calls are mocked — no real Docker or Postgres required.
 """
-import os
 import sys
-import subprocess
-import importlib
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -14,7 +11,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import src.launcher  # ensure module is importable before tests run
 
 
 # ---------------------------------------------------------------------------

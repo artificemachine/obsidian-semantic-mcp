@@ -832,10 +832,14 @@ class TestDashboardRecentNotesRelativization:
         def side_effect_fetchone():
             call_count["n"] += 1
             n = call_count["n"]
-            if n == 1:   return ("PostgreSQL 16",)
-            if n == 2:   return ("0.7.0",)
-            if n == 3:   return (len(rows_notes), None, None)
-            if n == 4:   return (1024,)
+            if n == 1:
+                return ("PostgreSQL 16",)
+            if n == 2:
+                return ("0.7.0",)
+            if n == 3:
+                return (len(rows_notes), None, None)
+            if n == 4:
+                return (1024,)
             return None
 
         mock_cur.fetchone.side_effect = side_effect_fetchone
@@ -1336,7 +1340,6 @@ class TestExtractWikilinks:
 
 class TestBuildLinkIndex:
     def test_indexes_md_files(self, tmp_path):
-        import server
         (tmp_path / "Alpha.md").write_text("# Alpha")
         (tmp_path / "beta note.md").write_text("# Beta")
 

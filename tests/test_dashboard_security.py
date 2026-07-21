@@ -18,17 +18,15 @@ from __future__ import annotations
 import http.client
 import http.server
 import importlib
-import json
 import os
 import re
-import stat
 import subprocess
 import sys
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import requests

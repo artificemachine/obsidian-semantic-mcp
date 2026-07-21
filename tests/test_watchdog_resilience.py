@@ -17,12 +17,10 @@ from __future__ import annotations
 import logging
 import os
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import psycopg2
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
