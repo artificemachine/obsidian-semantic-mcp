@@ -55,3 +55,13 @@ testpaths = ["tests"]
 markers = [
     "pg: requires a live PostgreSQL *_test database (see tests/conftest.py pg fixture); excluded by `-m \"not pg\"`",
 ]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+# No fail_under yet — the codecov step reports coverage but does not gate on a
+# threshold, because pg-marked tests (skipped without a database) swing the
+# number. Set a floor once a stable baseline is established in CI.
+show_missing = true

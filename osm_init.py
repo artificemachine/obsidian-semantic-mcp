@@ -62,6 +62,12 @@ def _c(code, text):
 
 
 def ok(msg):
+    # Under a dry run, run()/writes are faked (see run()'s DRY_RUN branch), so
+    # an unprefixed "✓ Setup complete!" would assert an outcome that never
+    # happened. Mark every success line as simulated instead.
+    if DRY_RUN:
+        print(f"  {_c('93', '○')}  [dry-run] {msg}")
+        return
     print(f"  {_c('92', '✓')}  {msg}")
 
 

@@ -1,0 +1,21 @@
+# gitleaks configuration for obsidian-semantic-mcp
+# Extends the default ruleset; adds an allowlist for synthetic test fixtures.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic secrets used by security regression tests — not live credentials."
+
+# Fixture markers: strings a test deliberately plants to assert the code does
+# NOT leak them (e.g. the startup banner must never print the DB password).
+regexes = [
+  '''s3cr3t-p4ssw0rd-marker''',
+  '''test-fixture-token-not-a-secret''',
+]
+
+# The dashboard security test spawns the server with a fake DATABASE_URL to
+# prove the banner redacts it; the fake password lives only here.
+paths = [
+  '''tests/test_dashboard_security\.py''',
+]

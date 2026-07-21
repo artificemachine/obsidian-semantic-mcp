@@ -29,21 +29,32 @@ Start with the bootstrap installer for your platform. If you already cloned the 
 
 ### First 60 seconds (new user)
 
-If you're in a fresh environment (no `osm` launcher yet), run these from the repo root:
+If you're in a fresh environment (no `osm` launcher yet), run these from the repo root.
+
+**Pick the mode number for your OS** — the recommended path is Full Docker (everything in containers, nothing to install but Docker):
+
+| OS | Recommended `--mode` |
+|----|----------------------|
+| macOS | `--mode 3` |
+| Linux / Windows | `--mode 2` |
 
 ```bash
-# 1) Preview setup actions safely (recommended: persistent data)
-uv run osm init --dry-run --mode 1 --vault "/path/to/your/vault" --pg-password "obsidian" --persistent --data-dir "/path/to/data"
+# 1) Preview setup actions safely — no changes made (use YOUR mode from the table)
+uv run osm init --dry-run --mode 3 --vault "/path/to/your/vault" --pg-password "obsidian" --persistent --data-dir "/path/to/data"
 
 # 2) Run setup for real
-uv run osm init --mode 1 --vault "/path/to/your/vault" --pg-password "obsidian" --persistent --data-dir "/path/to/data"
+uv run osm init --mode 3 --vault "/path/to/your/vault" --pg-password "obsidian" --persistent --data-dir "/path/to/data"
 
 # 3) Open the monitoring dashboard
 uv run osm dashboard
 ```
 
-> On macOS, `--mode 1` is Native install. For Docker-first installs, use mode 3 on macOS or mode 2 on Linux/Windows.
+> The commands above use `--mode 3` (macOS). On Linux/Windows use `--mode 2`.
+> Already running Ollama locally? Use `--mode 4` (Docker + host Ollama) to skip re-downloading the Ollama image and model.
+> `--mode 1` is a **native** (non-Docker) macOS install — only pick it if you specifically want Postgres and the server running outside containers.
 > For ephemeral/CI setups, use `--no-persistent` instead.
+
+> **Platform support:** macOS and Linux are the CI-tested paths — the full test suite (including PostgreSQL integration tests) runs on Linux in CI on every push. Windows is supported via the WSL2 Docker backend and the `install.ps1` / `osm.ps1` launchers, but is **not yet covered by CI**; treat it as community-tested until a Windows runner lands.
 
 **Before you start:**
 - **`uv`** must be installed — `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS/Linux) or `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"` (Windows)
@@ -615,6 +626,10 @@ The server indexes your vault on first run, then watches for changes automatical
 ## Cost
 
 Everything runs locally. No cloud APIs, no subscriptions. The only cost is disk space for the database (~a few MB for most vaults).
+
+## Documentation
+
+Full documentation — architecture, operations runbook, design records, explainers, and incident postmortems — is indexed in [`docs/README.md`](docs/README.md).
 
 ## License
 

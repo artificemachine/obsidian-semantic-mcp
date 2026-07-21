@@ -67,3 +67,6 @@ nul
 
 # hablatone project marker (sibling of the already-ignored .voice-toolkit-project)
 .hablatone-project
+
+# Active session handoff — working state, not public documentation
+HANDOFF.md
