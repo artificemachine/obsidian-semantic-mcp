@@ -54,7 +54,7 @@ uv run osm dashboard
 > `--mode 1` is a **native** (non-Docker) macOS install — only pick it if you specifically want Postgres and the server running outside containers.
 > For ephemeral/CI setups, use `--no-persistent` instead.
 
-> **Platform support:** macOS and Linux are the CI-tested paths — the full test suite (including PostgreSQL integration tests) runs on Linux in CI on every push. Windows is supported via the WSL2 Docker backend and the `install.ps1` / `osm.ps1` launchers, but is **not yet covered by CI**; treat it as community-tested until a Windows runner lands.
+> **Platform support:** Linux is the CI-tested path — the full test suite (including PostgreSQL integration tests) runs on `ubuntu-latest` in CI on every push. macOS is supported via `osm init --mode 3` (Docker Desktop on the recommended path, or `osm init --mode 1` native) but is not yet covered by CI. Windows is supported via the WSL2 Docker backend and the `install.ps1` / `osm.ps1` launchers, but is **not yet covered by CI**; treat it as community-tested until a Windows runner lands.
 
 **Before you start:**
 - **`uv`** must be installed — `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS/Linux) or `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"` (Windows)
@@ -462,7 +462,7 @@ OBSIDIAN_VAULT="/path/to/your/vault" uv run python3 src/dashboard.py
 uv run pytest -q
 ```
 
-Runs 439 tests (408 without a database, plus 31 PostgreSQL integration tests gated behind a `pg` marker) covering embedding, search, vault path safety, connection pool, dashboard auth, cross-process locking, schema migrations, the osm CLI wizard, and CI governance.
+Runs 446 tests (415 without a database, plus 31 PostgreSQL integration tests gated behind a `pg` marker) covering embedding, search, vault path safety, connection pool, dashboard auth, cross-process locking, schema migrations, the osm CLI wizard, and CI governance.
 
 ### `test_dashboard_smoke.py` — Dashboard health checks (Docker stack)
 
