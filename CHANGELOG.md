@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+- 2026-07-21: docs(agents): add GEMINI.md agent home for Gemini CLI. Completes the agent-instruction-files trio (CLAUDE.md, AGENTS.md, GEMINI.md) per global rule 19.
+- 2026-07-21: docs(audit): record 2026-07-21 production-ready audit (docs/audits/2026-07-21-production-ready.md). Verdict: READY → strict READY once the 4 follow-up PRs in this release land.
+- 2026-07-21: feat(osm-init): auto-generate DASHBOARD_TOKEN into .env so Docker installs no longer get an invisible ephemeral container-side token. `_generate_dashboard_token()` mirrors `config.resolve_dashboard_token()` precedence (env > `~/.config/obsidian-semantic-mcp/dashboard_token` > `secrets.token_urlsafe(32)`); `write_env()` takes an optional `dashboard_token=` kwarg. Closes the install gap surfaced during the v0.15.0 upgrade on this machine. TDD: 2 new tests in TestWriteEnv. Suite 444→446, 0 fail. (v0.15.1)
+- 2026-07-21: chore(shipguard): suppress known PY-007 / SC-004 false positives via `.shipguard.yml` `exclude_paths`. Findings 12→7. `src/dashboard.py` (vault_clause hardcoded literal) + generated caches (`.ruff_cache/`, `.pytest_cache/`, `__pycache__/`, `.coverage`). Replaced the misleading `rule_config.PY-007.skip_paths` block with a documented no-op + note: verified by reading shipguard 0.5.2 source that knob isn't honored; the working mechanism is `exclude_paths`. (v0.15.1)
+- 2026-07-21: chore(coverage): enforce `fail_under = 50` in `[tool.coverage.report]`. Suite 446 pass / 0 fail / 0 skip, 58.28% total. Replaces the stale comment ("set a floor once a stable baseline is established") — the baseline IS established. (v0.15.1)
+- 2026-07-21: test(dashboard): update stale smoke test `test_unknown_post_path_returns_404` to expect 401 (was 404). Since v0.15.0, `do_POST` calls `_require_auth()` before routing — auth-first is intentional design (no path enumeration without a token). Closes the last remaining test-suite defect from the 2026-07-21 HIRE-READY audit. (v0.15.1)
+- 2026-07-21: chore(lint): resolve 20 ruff F401/E701 findings across 8 files (7 test files + `src/server.py` unused `import json`); `tests/test_unit.py:835-838` split 4 multi-statement lines into idiomatic Python. Suite 443→444 pass, 0 fail. (v0.15.1)
 - 2026-07-21: docs: align CODE_OF_CONDUCT.md with concise 5-line CoC (replaces Contributor Covenant boilerplate with internal style)
 
 ## [0.8.0] — 2026-04-28
