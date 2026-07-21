@@ -1435,10 +1435,22 @@ def _native_entry(vault, db_url):
 # ── Docker compose helpers ────────────────────────────────────────────────────
 
 
-def compose(args, env=None):
+def compose(args, env=None, check=True, capture=False):
+    """Run a `docker compose …` command against PROJECT_ROOT.
+
+    Pass-through kwargs mirror `run()`:
+      - check=True (default): raise CalledProcessError on non-zero exit.
+      - check=False: return the CompletedProcess without raising (callers
+        inspect `.returncode` themselves — used by `osm migrate` to surface
+        the failure path without crashing the wizard).
+      - capture=False (default): stream stdout/stderr to the terminal.
+      - capture=True: capture into `.stdout`/`.stderr` (used by smoke checks).
+    """
     return run(
         ["docker", "compose", "--project-directory", str(PROJECT_ROOT)] + args,
         env=env,
+        check=check,
+        capture=capture,
     )
 
 
@@ -2946,6 +2958,7 @@ COMMANDS = {
     "update": (cmd_update, "Pull latest Docker images and restart services"),
     "version": (cmd_version, "Show installed version and check for updates"),
     "remove": (cmd_remove, "Stop services, delete volumes and config"),
+    "migrate": (cmd_migrate, "Re-embed notes into a new embedding dimension (non-destructive)"),
     "help": (cmd_help, "Show this help message"),
 }
 
