@@ -13,6 +13,7 @@ from __future__ import annotations
 import hmac
 import http.server
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -29,6 +30,10 @@ try:
 except ImportError:
     from config import build_dsn, _redact_dsn, resolve_dashboard_token  # fallback: run directly from src/ during dev
     from server import db_conn, embed, index_vault, _vec_to_str, _relative, VAULT_PATHS, _should_skip_path, reindex_lock
+
+# Importing server.py above already calls logging.basicConfig() — reuse the
+# same handler/format rather than configuring a second one.
+log = logging.getLogger(__name__)
 
 VAULT_PATH  = VAULT_PATHS[0] if VAULT_PATHS else ""
 OLLAMA_URL  = os.environ.get("OLLAMA_URL", "http://localhost:11434")
@@ -849,6 +854,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         prefix = "Bearer "
         supplied = header[len(prefix):] if header.startswith(prefix) else ""
         if not supplied or not hmac.compare_digest(supplied, get_dashboard_token()):
+            log.warning("dashboard: unauthorized %s %s from %s", self.command, self.path, self.client_address[0])
             self._json_response(401, {"ok": False, "message": "unauthorized"})
             return False
         return True
@@ -869,6 +875,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 results = search_notes(query, limit, min_similarity, mode, vault)
                 self._json_response(200, {"query": query, "mode": mode, "vault": vault, "results": results})
             except Exception as e:
+                log.error("dashboard: /api/search failed for query %r: %s", query, e)
                 self._json_response(500, {"error": str(e)})
         elif parsed.path == "/api/vaults":
             vaults = [{"name": os.path.basename(v), "path": v} for v in VAULT_PATHS]
@@ -908,8 +915,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
+            log.info("dashboard: ollama serve started via /api/ollama/start")
             self._json_response(200, {"ok": True, "message": "ollama serve started"})
         except Exception as e:
+            log.error("dashboard: /api/ollama/start failed: %s", e)
             self._json_response(500, {"ok": False, "message": str(e)})
 
     def _busy_response(self) -> None:
@@ -928,8 +937,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         acquired = lock_cm.__enter__()
         if not acquired:
             lock_cm.__exit__(None, None, None)
+            log.info("dashboard: reindex (full=%s) rejected — already in progress", full)
             self._busy_response()
             return
+
+        log.info("dashboard: reindex (full=%s) started for %d vault(s)", full, len(VAULT_PATHS))
 
         def _run():
             try:
@@ -940,6 +952,9 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                                 cur.execute("DELETE FROM notes;")
                 for vp in VAULT_PATHS:
                     index_vault(vp)
+                log.info("dashboard: reindex (full=%s) finished", full)
+            except Exception:
+                log.exception("dashboard: reindex (full=%s) failed", full)
             finally:
                 lock_cm.__exit__(None, None, None)
 
@@ -950,8 +965,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         try:
             from server import prune_orphans
             n = prune_orphans()
+            log.info("dashboard: /api/prune deleted %d orphaned note(s)", n)
             self._json_response(200, {"ok": True, "deleted": n})
         except Exception as e:
+            log.error("dashboard: /api/prune failed: %s", e)
             self._json_response(500, {"ok": False, "message": str(e)})
 
     def log_message(self, format, *args):

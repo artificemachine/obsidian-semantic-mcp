@@ -198,6 +198,18 @@ def test_post_reindex_without_token_returns_401(monkeypatch):
         assert r.json() == {"ok": False, "message": "unauthorized"}
 
 
+def test_unauthorized_request_is_logged(monkeypatch, caplog):
+    """Regression for the arch-audit's observability finding: dashboard.py
+    had zero structured logging, so a failed auth attempt left no trace.
+    An unauthorized request must now produce a log record — this is a
+    security-relevant event, not just an HTTP status code."""
+    with caplog.at_level("WARNING", logger="dashboard"):
+        with _running_dashboard(monkeypatch) as base_url:
+            r = requests.post(f"{base_url}/api/reindex")
+            assert r.status_code == 401
+    assert any("unauthorized" in rec.message for rec in caplog.records)
+
+
 def test_post_reindex_full_without_token_returns_401(monkeypatch):
     with _running_dashboard(monkeypatch) as base_url:
         r = requests.post(f"{base_url}/api/reindex/full")
