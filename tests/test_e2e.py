@@ -37,7 +37,6 @@ def send(proc, method, params=None, *, is_notification=False):
 
 def recv(proc, timeout=60):
     """Read one JSON-RPC response, accumulating lines until valid JSON with an id."""
-    import select
     deadline = time.time() + timeout
     buf = ""
     while time.time() < deadline:
@@ -179,7 +178,7 @@ def main():
         elif resp and "error" in resp:
             check("search_vault responded", False, f"error: {resp['error']}")
         else:
-            check("search_vault responded", False, f"no response (timeout?)")
+            check("search_vault responded", False, "no response (timeout?)")
 
         # ── 5. Reindex ───────────────────────────────────────────────────────
         print("\n[5] Reindex trigger")
