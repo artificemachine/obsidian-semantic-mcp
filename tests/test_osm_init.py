@@ -235,6 +235,27 @@ class TestWriteEnv:
         self._call(tmp_path)
         assert any(".env" in a for a in osm_init._DRY_ACTIONS)
 
+    # ── DASHBOARD_TOKEN auto-gen ───────────────────────────────────────────
+    # Docker users previously got an ephemeral container-side token because
+    # the compose env interpolation read `DASHBOARD_TOKEN:-` as empty.
+    # osm init must now write a token to .env so a stable token survives
+    # container recreates and the user can curl the dashboard.
+
+    def test_writes_dashboard_token_when_passed(self, tmp_path):
+        """Explicit dashboard_token kwarg is written verbatim to .env."""
+        self._call(tmp_path, dashboard_token="explicit-token-abc123")
+        content = (tmp_path / ".env").read_text()
+        assert "DASHBOARD_TOKEN=explicit-token-abc123" in content
+
+    def test_dashboard_token_auto_generated_when_omitted(self, tmp_path):
+        """When no dashboard_token is passed, write_env auto-generates one
+        (mocked here to keep the test deterministic; the real generator
+        delegates to config.resolve_dashboard_token)."""
+        with patch("osm_init._generate_dashboard_token", return_value="auto-gen-token-xyz"):
+            self._call(tmp_path)
+        content = (tmp_path / ".env").read_text()
+        assert "DASHBOARD_TOKEN=auto-gen-token-xyz" in content
+
 
 # ── _resolve_project_root ─────────────────────────────────────────────────────
 

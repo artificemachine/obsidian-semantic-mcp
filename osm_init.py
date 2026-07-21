@@ -28,6 +28,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
+import secrets
 
 # Ensure stdout/stderr can handle Unicode on Windows (cp1252 etc.)
 if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8":
@@ -851,6 +852,47 @@ def _ensure_ollama_model(ollama_url: str, model: str = EMBED_MODEL) -> None:
 # ── .env writer (runtime only — gitignored) ───────────────────────────────────
 
 
+# Path shared with src/config.py:resolve_dashboard_token() — keep in sync.
+# Inlined here because osm_init.py is force-shipped in the wheel and can't
+# easily import from the src/ package on a fresh install.
+_OSM_CONFIG_DIR = Path.home() / ".config" / "obsidian-semantic-mcp"
+_DASHBOARD_TOKEN_FILE = _OSM_CONFIG_DIR / "dashboard_token"
+
+
+def _generate_dashboard_token() -> str:
+    """Generate or reuse the dashboard bearer token that guards the
+    mutating endpoints (/api/reindex, /api/reindex/full, /api/prune,
+    /api/ollama/start).
+
+    Reuses ~/.config/obsidian-semantic-mcp/dashboard_token if present
+    so the token survives `osm init` re-runs and `osm update` /
+    `osm rebuild` (no auth flap). On a fresh install, generates a new
+    token_urlsafe(32) and persists it mode 0600 — never written under
+    the repo checkout.
+
+    Mirrors src/config.py:resolve_dashboard_token() precedence but is
+    duplicated here because osm_init.py is the wheel's entrypoint and
+    can't import from src/ at first-run time.
+    """
+    if env_token := os.environ.get("DASHBOARD_TOKEN"):
+        return env_token
+    if _DASHBOARD_TOKEN_FILE.exists():
+        try:
+            existing = _DASHBOARD_TOKEN_FILE.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+        except OSError:
+            pass
+    token = secrets.token_urlsafe(32)
+    try:
+        _OSM_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _DASHBOARD_TOKEN_FILE.write_text(token, encoding="utf-8")
+        _DASHBOARD_TOKEN_FILE.chmod(0o600)
+    except OSError:
+        pass
+    return token
+
+
 def write_env(
     vault,
     pg_password,
@@ -859,6 +901,7 @@ def write_env(
     pgdata_path=None,
     ollama_data_path=None,
     compose_profiles=None,
+    dashboard_token=None,
 ):
     """
     Write .env in the project root at runtime. This file is gitignored.
@@ -871,21 +914,29 @@ def write_env(
 
     pgdata_path / ollama_data_path, if set, are written as PGDATA_PATH /
     OLLAMA_DATA_PATH so Docker Compose uses bind mounts instead of named volumes.
+
+    dashboard_token, if None, is auto-generated via _generate_dashboard_token()
+    so Docker users don't get the ephemeral/invisible container-side token.
+    Pass an explicit value to override (used by tests).
     """
     env_path = PROJECT_ROOT / ".env"
     vaults = vault if isinstance(vault, list) else [vault]
+    if dashboard_token is None:
+        dashboard_token = _generate_dashboard_token()
     if len(vaults) > 1:
         lines = [
             f"OBSIDIAN_VAULTS={','.join(vaults)}",
             f"OBSIDIAN_VAULT={vaults[0]}",
             f"POSTGRES_PASSWORD={pg_password}",
             f"OLLAMA_URL={ollama_url}",
+            f"DASHBOARD_TOKEN={dashboard_token}",
         ]
     else:
         lines = [
             f"OBSIDIAN_VAULT={vaults[0]}",
             f"POSTGRES_PASSWORD={pg_password}",
             f"OLLAMA_URL={ollama_url}",
+            f"DASHBOARD_TOKEN={dashboard_token}",
         ]
     if pgdata_path:
         lines.append(f"PGDATA_PATH={pgdata_path}")
