@@ -1253,6 +1253,28 @@ def _patch_pi_mcp_bridge(ext_path: Path):
             info("  See docs/pi_mcp_bridge_heartbeat.md")
 
 
+def _pi_enabled() -> bool:
+    """Whether to configure the niche `pi` MCP client during init.
+
+    `pi` is a fourth, optional client alongside Claude Desktop / Code /
+    OpenCode. It is configured only when the `pi` binary is on PATH AND the
+    user has not opted out with OSM_SKIP_PI. The opt-out lets a `pi` user run
+    (or record) a clean setup that matches what the majority — who have no
+    `pi` — see, without uninstalling anything.
+    """
+    if os.environ.get("OSM_SKIP_PI", "").strip().lower() in ("1", "true", "yes"):
+        return False
+    return cmd_exists("pi")
+
+
+def _mcp_clients_label() -> str:
+    """The client list shown in the 'MCP client configuration' heading —
+    names `pi` only when it will actually be configured, so a user who will
+    never see the pi step also never sees it advertised."""
+    clients = "Claude Desktop, Claude Code CLI, OpenCode"
+    return f"{clients}, pi" if _pi_enabled() else clients
+
+
 def register_pi_agent():
     """Register obsidian-semantic with pi's mcp-bridge extension.
 
@@ -1266,9 +1288,10 @@ def register_pi_agent():
     present: the heartbeat must start at spawn time, not after initialize,
     because initialize itself depends on the same yield mechanism.
 
-    Silently skips when the ``pi`` binary is not on PATH.
+    Silently skips when the ``pi`` binary is not on PATH, or when the user
+    opts out with ``OSM_SKIP_PI`` (see _pi_enabled).
     """
-    if not cmd_exists("pi"):
+    if not _pi_enabled():
         return
 
     mcp_path = _pi_agent_mcp_path()
@@ -1692,7 +1715,7 @@ def mode_native_macos():
     ok("Dependencies installed in .venv")
 
     # ── Claude Desktop + CLI config ───────────────────────────────────────────
-    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
+    header(f"MCP client configuration  ({_mcp_clients_label()})")
     entry = _native_entry(vault, db_url)
     register_with_clients(entry)
 
@@ -1742,7 +1765,7 @@ def mode_full_docker():
     # Pull the embedding model so indexing works on first run.
     _ensure_ollama_model("http://localhost:11435")
 
-    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
+    header(f"MCP client configuration  ({_mcp_clients_label()})")
     entry = _docker_entry()
     register_with_clients(entry)
     _done_docker()
@@ -1795,7 +1818,7 @@ def mode_docker_host_ollama():
     compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
     wait_for_postgres()
 
-    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
+    header(f"MCP client configuration  ({_mcp_clients_label()})")
     entry = _docker_entry()
     register_with_clients(entry)
     _done_docker()
@@ -1950,7 +1973,7 @@ def mode_docker_remote_ollama():
     compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
     wait_for_postgres()
 
-    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
+    header(f"MCP client configuration  ({_mcp_clients_label()})")
     entry = _docker_entry()
     register_with_clients(entry)
     _done_docker_remote(ssh_user, remote_host, remote_port, local_tunnel_port, key_path)
@@ -2518,7 +2541,7 @@ def cmd_update():
     # Re-run client registration so any newly installed clients get configured
     # and mcp-bridge patches are applied even if they were installed after osm init.
     print()
-    header("MCP client configuration  (Claude Desktop, Claude Code CLI, OpenCode, pi)")
+    header(f"MCP client configuration  ({_mcp_clients_label()})")
     hr()
     entry = _docker_entry()
     update_claude_config(entry)

@@ -433,6 +433,9 @@ When using multiple vaults, the `search_vault` MCP tool gains a `vault` paramete
 | `EMBED_WORKERS` | Parallel threads for bulk indexing | `4` |
 | `RERANK_MODEL` | Optional Ollama model for cross-encoder re-ranking (e.g. `llama3.2`). Disabled when empty. | — |
 | `RERANK_CANDIDATES` | Candidate pool size fetched before re-ranking | `20` |
+| `DASHBOARD_BIND` | Interface the monitoring dashboard binds to. Loopback by default; set `0.0.0.0` only for a native install reachable from another host. | `127.0.0.1` |
+| `DASHBOARD_TOKEN` | Bearer token for the dashboard's mutating endpoints. Generated and stored at `~/.config/obsidian-semantic-mcp/dashboard_token` (mode `0600`) if unset. | *auto-generated* |
+| `OSM_SKIP_PI` | Set to `1` to skip configuring the optional `pi` MCP client during `osm init`, even if the `pi` binary is installed. Useful for a clean setup matching what most users (no `pi`) see. | — |
 
 ## Monitoring Dashboard
 
