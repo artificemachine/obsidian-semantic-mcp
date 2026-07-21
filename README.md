@@ -168,6 +168,16 @@ The server indexes your vault on first run, then watches for changes automatical
 
 ---
 
+### Native Install (macOS)
+
+Prefer not to run Docker? `osm init --mode 1` installs PostgreSQL + pgvector and Ollama via Homebrew and runs the MCP server in-process — no containers. Pick this if you already avoid Docker, or want the server sharing your Mac's native Ollama install directly.
+
+```bash
+uv run osm init --mode 1 --vault "/path/to/your/vault"
+```
+
+This mode registers the MCP client entry with `OBSIDIAN_VAULT`/`DATABASE_URL` set directly on the entry (Docker mode instead loads a `.env` the launcher finds via the running container's project root) — restart your MCP client afterward the same as any other mode.
+
 ### Manual start (without wizard)
 
 ```bash
@@ -213,6 +223,16 @@ deploy:
       devices:
         - capabilities: [gpu]
 ```
+
+### Troubleshoot
+
+The top 3 things that go wrong on first install:
+
+- **No search results / Claude says the server isn't connected** — first-run indexing takes 5–15 minutes for a 500-note vault; watch progress at http://localhost:8484, or `docker compose logs -f mcp-server`.
+- **Postgres connection failures** — check the container is healthy: `docker compose ps`, then `docker compose exec postgres pg_isready -U obsidian`.
+- **Ollama unreachable** — confirm it's running: `curl http://localhost:11434/api/tags` (or the SSH tunnel's local port for remote-Ollama mode).
+
+Full incident-by-incident guide, including dashboard/indexing/Ollama-container recovery steps: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ---
 

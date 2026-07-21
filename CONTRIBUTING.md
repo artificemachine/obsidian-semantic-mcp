@@ -10,7 +10,7 @@ When using chat-based coding agents (Claude Code, Codex, OpenCode), ask for expl
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.10+
 - [uv](https://github.com/astral-sh/uv) — fast Python package manager
 - Docker Desktop (for integration tests) — `osm init` can install it for you, or install manually
 - Ollama running locally (`ollama serve`)
@@ -31,7 +31,7 @@ OBSIDIAN_VAULT=/path/to/vault uv run python3 tests/test_setup.py   # prereq chec
 OBSIDIAN_VAULT=/path/to/vault uv run python3 tests/test_e2e.py      # end-to-end
 ```
 
-All 183 unit tests must pass before submitting a PR.
+The full test suite must pass before submitting a PR (see the [Tests badge](README.md) for the current count).
 
 ## Code Style
 
