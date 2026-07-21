@@ -61,7 +61,9 @@ source = ["src"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
-# No fail_under yet — the codecov step reports coverage but does not gate on a
-# threshold, because pg-marked tests (skipped without a database) swing the
-# number. Set a floor once a stable baseline is established in CI.
+# Baseline established 2026-07-21: total 58%, pg-marked tests run reliably in
+# CI against the service container (see docs/audits/2026-07-21-production-ready.md).
+# Floor at 50 — well below current total, gives headroom for new code without
+# hiding a regression. Bump after src/server.py (48%) coverage grows.
+fail_under = 50
 show_missing = true
