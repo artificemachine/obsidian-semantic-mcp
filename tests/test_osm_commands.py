@@ -626,6 +626,38 @@ class TestCmdHelp:
         assert "Examples" in out
 
 
+# ── cmd_migrate dispatch (Stage 6 portfolio-ready audit fix) ─────────────────
+
+class TestCmdMigrateDispatch:
+    """cmd_migrate is defined in osm_init.py (line 2439) and exercised by the
+    pg-marked test suite, but the CHANGELOG for v0.15.0 withheld registration
+    in the COMMANDS dispatch dict pending Docker-exec delegation verification.
+
+    The Stage 6 portfolio-ready audit (2026-07-21) flagged this as dead code:
+    ~150 lines of unreachable CLI surface. This test pins the fix: cmd_migrate
+    must be registered in osm_init.COMMANDS so `osm migrate --embedding-dim N`
+    is reachable from the CLI."""
+
+    def test_migrate_in_commands_dispatch(self):
+        assert "migrate" in osm_init.COMMANDS, (
+            "cmd_migrate must be registered in osm_init.COMMANDS so it is "
+            "reachable via the CLI (Stage 6 portfolio-ready audit fix)."
+        )
+
+    def test_migrate_dispatch_points_to_cmd_migrate(self):
+        cmd, _desc = osm_init.COMMANDS["migrate"]
+        assert cmd is osm_init.cmd_migrate, (
+            "osm_init.COMMANDS['migrate'] must point at osm_init.cmd_migrate"
+        )
+
+    def test_help_output_lists_migrate(self, capsys):
+        osm_init.cmd_help()
+        out = capsys.readouterr().out
+        assert "osm migrate" in out, (
+            "cmd_help must enumerate every dispatch entry including migrate"
+        )
+
+
 # ── cmd_status ────────────────────────────────────────────────────────────────
 
 class TestCmdStatus:

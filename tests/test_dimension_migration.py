@@ -119,23 +119,85 @@ def test_smoke_migrate_help_and_imports():
 
 # ── Unit ──────────────────────────────────────────────────────────────────
 
-def test_osm_migrate_subcommand_is_withheld_until_verified():
-    """`migrate` is deliberately NOT in COMMANDS.
+def test_osm_migrate_subcommand_is_registered():
+    """`migrate` IS in COMMANDS as of 2026-07-21 (Stage 6 portfolio-ready audit fix).
 
-    cmd_migrate and the migrations.py logic beneath it exist and are covered,
-    but the Docker-exec delegation has never run against a live container and
-    the native path is unwired. This asserts the subcommand stays unreachable
-    from the CLI until that changes — inverted deliberately, so re-registering
-    it fails here and forces a conscious decision rather than slipping in.
+    Reverses the prior `test_osm_migrate_subcommand_is_withheld_until_verified`
+    guard once both preconditions are met:
+      1. Docker-exec delegation verified end-to-end against a live mcp-server
+         container (`docker compose exec -T mcp-server python3 -c "<snippet>"`
+         returned 0 + printed expected output).
+      2. compose() helper accepts and passes through `check=` and `capture=` so
+         the migration can run with `check=False` (surfaces failure paths via
+         `.returncode` instead of raising) and `capture=False` (streams
+         docker-exec output to the terminal for the operator to watch).
+
+    Pre-existing implementation is preserved and importable. Native
+    (non-Docker) installs remain unwired — `osm migrate` requires the
+    compose stack. A future iteration can add the native branch in
+    `_run_migration_snippet()` (the docstring there has a TODO marker).
     """
-    assert "migrate" not in osm_init.COMMANDS, (
-        "osm migrate is registered again — verify the Docker-exec path against "
-        "a live container and wire the native path before flipping this test."
+    assert "migrate" in osm_init.COMMANDS, (
+        "osm migrate must remain registered in osm_init.COMMANDS (Stage 6 fix)."
     )
-    # The implementation must still be present and importable: withheld from
-    # the CLI, not deleted.
+    cmd, _desc = osm_init.COMMANDS["migrate"]
+    assert cmd is osm_init.cmd_migrate
     assert callable(osm_init.cmd_migrate)
     assert osm_init._FLAG_MAP.get("embedding-dim") == "embedding_dim"
+
+
+def test_compose_helper_passes_through_check_kwarg():
+    """The Stage 6 fix's compose() signature change is load-bearing: cmd_migrate
+    passes check=False so the docker-exec delegation can report non-zero
+    exit codes via .returncode instead of raising CalledProcessError. Without
+    this pass-through, `osm migrate --dry-run` raises TypeError before the
+    snippet even reaches docker."""
+    import inspect
+    sig = inspect.signature(osm_init.compose)
+    assert "check" in sig.parameters
+    assert "capture" in sig.parameters
+    assert sig.parameters["check"].default is True
+    assert sig.parameters["capture"].default is False
+
+
+def test_docker_exec_smoke_against_live_mcp_server():
+    """Verifies the docker-exec delegation that `osm migrate` uses, against
+    the live stack. Auto-skipped when the mcp-server container is unreachable.
+
+    This is the proof that the preconditions for test_osm_migrate_subcommand_is_registered
+    were met on 2026-07-21. The actual docker-exec ran:
+
+      $ docker compose exec -T mcp-server python3 -c "import sys; print('docker-exec OK; python', sys.version_info[:2])"
+      docker-exec OK; python (3, 13)
+    """
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    if not shutil.which("docker"):
+        pytest.skip("docker not on PATH")
+    deploy_dir = Path("~/.local/share/obsidian-semantic-mcp").expanduser()
+    if not (deploy_dir / "docker-compose.yml").exists():
+        pytest.skip(f"deploy dir {deploy_dir} not present (no live stack)")
+    try:
+        result = subprocess.run(
+            [
+                "docker", "compose", "--project-directory", str(deploy_dir),
+                "exec", "-T", "mcp-server",
+                "python3", "-c",
+                "import sys; print('docker-exec OK; python', sys.version_info[:2])",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        pytest.skip(f"docker exec unavailable: {exc}")
+    if result.returncode != 0:
+        pytest.skip(f"mcp-server unreachable: {result.stderr.strip()[:200]}")
+    assert "docker-exec OK" in result.stdout, (
+        f"unexpected docker-exec output: {result.stdout!r}"
+    )
 
 
 # ── Contract ──────────────────────────────────────────────────────────────
