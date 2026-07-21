@@ -658,6 +658,92 @@ class TestCmdMigrateDispatch:
         )
 
 
+# ── _run_migration_snippet native branch ──────────────────────────────────────
+
+class TestMigrateNativeBranch:
+    """Native (non-Docker) installs never write a .env or run an mcp-server
+    container, so `osm migrate` must detect that and fall back to a local
+    `uv run` subprocess instead of `docker compose exec`."""
+
+    def test_docker_detected_when_mcp_server_container_present(self, monkeypatch):
+        monkeypatch.setattr(osm_init, "compose", lambda *a, **kw: _cp(0, stdout="abcd1234\n"))
+        assert osm_init._migrate_target_is_docker() is True
+
+    def test_docker_not_detected_when_no_container(self, monkeypatch):
+        monkeypatch.setattr(osm_init, "compose", lambda *a, **kw: _cp(0, stdout=""))
+        assert osm_init._migrate_target_is_docker() is False
+
+    def test_docker_not_detected_when_compose_errors(self, monkeypatch):
+        monkeypatch.setattr(osm_init, "compose", lambda *a, **kw: _cp(1, stdout=""))
+        assert osm_init._migrate_target_is_docker() is False
+
+    def test_docker_path_uses_compose_exec(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(osm_init, "compose", lambda args, **kw: (calls.append(("compose", args)), _cp(0))[1])
+        monkeypatch.setattr(osm_init, "run", lambda *a, **kw: calls.append(("run", a)) or _cp(0))
+        monkeypatch.setattr(osm_init, "_migrate_target_is_docker", lambda: True)
+        osm_init._run_migration_snippet(1024, dry_run=True)
+        assert calls[0][0] == "compose"
+        assert calls[0][1][0] == "exec"
+        assert "mcp-server" in calls[0][1]
+        assert not any(c[0] == "run" for c in calls[1:]), "docker path must not also shell out via run()"
+
+    def test_native_path_uses_uv_run_not_docker_exec(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(osm_init, "compose", lambda args, **kw: calls.append(("compose", args)) or _cp(0))
+        monkeypatch.setattr(osm_init, "run", lambda cmd, **kw: calls.append(("run", cmd, kw)) or _cp(0))
+        monkeypatch.setattr(osm_init, "_migrate_target_is_docker", lambda: False)
+        monkeypatch.setattr(osm_init, "_read_env", lambda: {})
+        osm_init._run_migration_snippet(1024, dry_run=True)
+        assert not any(c[0] == "compose" for c in calls), "native path must not shell out via docker compose exec"
+        run_calls = [c for c in calls if c[0] == "run"]
+        assert len(run_calls) == 1
+        cmd = run_calls[0][1]
+        assert cmd[:3] == ["uv", "run", "--project"], "native migration must run via uv run"
+        assert "python3" in cmd and "-c" in cmd
+
+    def test_native_path_sets_database_url_from_env_or_default(self, monkeypatch):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["env"] = kw.get("env")
+            return _cp(0)
+
+        monkeypatch.setattr(osm_init, "_migrate_target_is_docker", lambda: False)
+        monkeypatch.setattr(osm_init, "run", fake_run)
+        monkeypatch.setattr(osm_init, "_read_env", lambda: {})
+        osm_init._run_migration_snippet(1024, dry_run=True)
+        assert captured["env"]["DATABASE_URL"] == osm_init._NATIVE_DB_URL
+
+    def test_native_path_prefers_env_database_url_when_present(self, monkeypatch):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["env"] = kw.get("env")
+            return _cp(0)
+
+        monkeypatch.setattr(osm_init, "_migrate_target_is_docker", lambda: False)
+        monkeypatch.setattr(osm_init, "run", fake_run)
+        monkeypatch.setattr(osm_init, "_read_env", lambda: {"DATABASE_URL": "postgresql://custom/db"})
+        osm_init._run_migration_snippet(1024, dry_run=True)
+        assert captured["env"]["DATABASE_URL"] == "postgresql://custom/db"
+
+    def test_native_snippet_points_sys_path_at_project_src_not_app_src(self, monkeypatch):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            return _cp(0)
+
+        monkeypatch.setattr(osm_init, "_migrate_target_is_docker", lambda: False)
+        monkeypatch.setattr(osm_init, "run", fake_run)
+        monkeypatch.setattr(osm_init, "_read_env", lambda: {})
+        osm_init._run_migration_snippet(1024, dry_run=True)
+        snippet = captured["cmd"][-1]
+        assert "/app/src" not in snippet, "native snippet must not reference the container's /app/src path"
+        assert str(osm_init.PROJECT_ROOT / "src") in snippet
+
+
 # ── cmd_status ────────────────────────────────────────────────────────────────
 
 class TestCmdStatus:
