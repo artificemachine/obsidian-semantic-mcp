@@ -1,3 +1,5 @@
+> **Status: speculative proposal, not decided, not shipped.** The project name remains `obsidian-semantic-mcp`. This doc is an unadopted idea kept for reference only.
+
 # Proposed rename: `obsidian-semantic-mcp` → `mnemosyne-mcp`
 
 *Date: 2026-05-18*

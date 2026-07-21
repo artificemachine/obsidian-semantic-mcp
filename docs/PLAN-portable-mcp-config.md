@@ -1,3 +1,5 @@
+> **Status: historical design record, not current-state documentation.** This plan drove work that has since shipped. Kept for context. For how the system works today see [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`README.md`](../README.md).
+
 # Portable MCP Config — obsidian-semantic-mcp
 
 ## The problem
