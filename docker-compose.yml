@@ -122,6 +122,15 @@ services:
       postgres:
         condition: service_healthy
     command: ["python3", "src/dashboard.py"]
+    healthcheck:
+      # Dashboard serves the live status page on DASHBOARD_PORT. A 200 from
+      # the index confirms the HTTP server is up; deeper checks (postgres /
+      # ollama) live in /api/stats and don't need to gate restarts.
+      test: ["CMD", "python3", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('DASHBOARD_PORT', '8484') + '/', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     environment:
       OBSIDIAN_VAULT: /vault   # single-vault default
       # OBSIDIAN_VAULTS: /vault1,/vault2  # multi-vault: mount each path below
