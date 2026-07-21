@@ -2441,13 +2441,6 @@ def cmd_rebuild():
 # backfill_embedding_column / cutover_embedding_column).
 
 
-# NOT REGISTERED in COMMANDS. `migrations.migrate_embedding_dimension()` and
-# its add/backfill/cutover helpers are implemented and covered by the pg suite,
-# but this CLI wrapper's Docker-exec delegation has never been executed against
-# a live container, and the native (non-Docker) path is not wired at all.
-# Shipping an unexecuted destructive command in a public release is not a trade
-# worth making, so the subcommand is withheld until that path is verified.
-# Re-register in COMMANDS (and restore the two `osm help` lines) at that point.
 def cmd_migrate():
     header("OSM Migrate — embedding dimension")
     hr()
@@ -2492,32 +2485,55 @@ def cmd_migrate():
     ok(f"Migration to vector({new_dim}) complete.")
 
 
-def _run_migration_snippet(new_dim: int, *, dry_run: bool):
-    """Delegate the actual migration to the running mcp-server container,
-    which already has psycopg2, migrations.py, and the configured embed()
-    function available — mirrors the exec pattern used elsewhere in this
-    file (see register_pi_agent's docker compose exec -T mcp-server call).
+_NATIVE_DB_URL = "postgresql://localhost/obsidian_brain"
 
-    UNVERIFIED against a live container by the agent that wrote this (see
-    the implementation report for docs/PLAN-security-correctness.md
-    iteration 8) — review this snippet carefully before relying on it
-    against real data. Native (non-Docker) installs are not yet wired; add
-    a branch here before shipping a native `osm migrate` path.
-    """
-    snippet = (
-        "import sys; sys.path.insert(0, '/app/src'); "
+
+def _migration_snippet(src_path: str, new_dim: int, *, dry_run: bool) -> str:
+    """Build the in-process migration snippet, parameterized on where `src/`
+    lives (`/app/src` inside the mcp-server container, or PROJECT_ROOT/src
+    for a native install running it directly)."""
+    return (
+        f"import sys; sys.path.insert(0, {src_path!r}); "
         "import server, migrations; "
         "server.init_db(server.get_embed_dim()); "
         "conn = server._get_pool().getconn(); "
-        "acquired = False; "
         "try:\n"
         f"    result = migrations.migrate_embedding_dimension(conn, None, {new_dim}, server.embed, dry_run={dry_run!r}); "
         "    print(result)\n"
         "finally:\n"
         "    server._get_pool().putconn(conn)\n"
     )
-    return compose(
-        ["exec", "-T", "mcp-server", "python3", "-c", snippet],
+
+
+def _migrate_target_is_docker() -> bool:
+    """True when an mcp-server container exists for this project (Docker
+    install). False means native — the snippet must run locally via `uv
+    run` instead of `docker compose exec`."""
+    r = compose(["ps", "-q", "mcp-server"], check=False, capture=True)
+    return bool(r.returncode == 0 and (r.stdout or "").strip())
+
+
+def _run_migration_snippet(new_dim: int, *, dry_run: bool):
+    """Delegate the actual migration to wherever psycopg2, migrations.py,
+    and the configured embed() function are available: the running
+    mcp-server container for Docker installs (mirrors the exec pattern used
+    elsewhere in this file — see register_pi_agent's docker compose exec -T
+    mcp-server call), or a local `uv run` subprocess against PROJECT_ROOT
+    for native installs (mode_native_macos never writes a .env, so
+    DATABASE_URL falls back to the fixed native default; OLLAMA_URL and
+    EMBEDDING_MODEL already default correctly in server.py)."""
+    if _migrate_target_is_docker():
+        snippet = _migration_snippet("/app/src", new_dim, dry_run=dry_run)
+        return compose(
+            ["exec", "-T", "mcp-server", "python3", "-c", snippet],
+            check=False,
+        )
+
+    snippet = _migration_snippet(str(PROJECT_ROOT / "src"), new_dim, dry_run=dry_run)
+    env = {**os.environ, "DATABASE_URL": _read_env().get("DATABASE_URL", _NATIVE_DB_URL)}
+    return run(
+        ["uv", "run", "--project", str(PROJECT_ROOT), "python3", "-c", snippet],
+        env=env,
         check=False,
     )
 

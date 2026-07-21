@@ -133,9 +133,9 @@ def test_osm_migrate_subcommand_is_registered():
          docker-exec output to the terminal for the operator to watch).
 
     Pre-existing implementation is preserved and importable. Native
-    (non-Docker) installs remain unwired — `osm migrate` requires the
-    compose stack. A future iteration can add the native branch in
-    `_run_migration_snippet()` (the docstring there has a TODO marker).
+    (non-Docker) installs are wired too, as of the branch added to
+    `_run_migration_snippet()` — see TestMigrateNativeBranch in
+    tests/test_osm_commands.py for that path's coverage.
     """
     assert "migrate" in osm_init.COMMANDS, (
         "osm migrate must remain registered in osm_init.COMMANDS (Stage 6 fix)."
