@@ -188,6 +188,50 @@ def test_missing_db_config_exits(tmp_path, monkeypatch):
 # 7. OSM_DOCKER_WAIT=0 → no polling, immediate fallback
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 8. osm_init's native MCP entry must actually be launchable
+#
+# Regression for a bug found by the 2026-07-21 arch-audit: `osm init --mode 1`
+# (native macOS) registered a Claude Desktop/Code entry with an empty `env`
+# dict, and never wrote a `.env` file for the launcher to load either — so
+# the registered entry could not launch. `_native_entry()` accepted `vault`/
+# `db_url` params and silently discarded them. This test simulates the real
+# launch: `_native_entry()`'s returned `env` is the *only* environment the
+# subprocess gets (matching how an MCP client launches a configured command),
+# fed straight into `_validate_env()`.
+# ---------------------------------------------------------------------------
+
+def test_native_entry_env_is_launchable(monkeypatch):
+    import osm_init
+    from src import launcher
+
+    entry = osm_init._native_entry(["/path/to/vault"], "postgresql://localhost/obsidian_brain")
+
+    monkeypatch.setattr("os.environ", entry["env"])
+
+    launcher._validate_env()  # must not raise/exit
+
+
+def test_native_entry_multi_vault_uses_obsidian_vaults():
+    import osm_init
+
+    entry = osm_init._native_entry(
+        ["/path/a", "/path/b"], "postgresql://localhost/obsidian_brain"
+    )
+
+    assert entry["env"]["OBSIDIAN_VAULTS"] == "/path/a,/path/b"
+    assert "OBSIDIAN_VAULT" not in entry["env"]
+
+
+def test_native_entry_single_vault_uses_obsidian_vault():
+    import osm_init
+
+    entry = osm_init._native_entry(["/path/a"], "postgresql://localhost/obsidian_brain")
+
+    assert entry["env"]["OBSIDIAN_VAULT"] == "/path/a"
+    assert "OBSIDIAN_VAULTS" not in entry["env"]
+
+
 def test_docker_wait_zero_skips_polling(tmp_path, monkeypatch):
     monkeypatch.setenv("OBSIDIAN_VAULT", str(tmp_path / "vault"))
     monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
