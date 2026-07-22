@@ -450,7 +450,10 @@ HTML_PAGE = """<!DOCTYPE html>
   .dot.grey   { background: #9a9488; }
   .recent { background: var(--paper-2); border-radius: 4px; padding: 20px;
     margin-bottom: 24px; }
-  .recent h2 { font-family: var(--serif); font-weight: 500; font-size: 1.15rem; color: var(--ink); margin-bottom: 12px; }
+  .recent h2 { font-family: var(--serif); font-weight: 500; font-size: 1.15rem; color: var(--ink); margin-bottom: 12px;
+    cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; }
+  .recent h2 #recent-arrow { font-size: 0.8em; transition: transform 0.15s; display: inline-block; }
+  .recent h2.collapsed #recent-arrow { transform: rotate(-90deg); }
   .recent-item {
     display: flex; justify-content: space-between; padding: 6px 0;
     border-bottom: 1px solid var(--ink-faint); font-size: 0.85rem;
@@ -587,7 +590,7 @@ HTML_PAGE = """<!DOCTYPE html>
 </div>
 
 <div class="recent">
-  <h2>Recently Indexed</h2>
+  <h2 onclick="toggleRecent()" id="recent-toggle">Recently Indexed <span id="recent-arrow">&#9662;</span></h2>
   <div id="recent-list"><div class="recent-item"><span class="recent-path">Loading...</span></div></div>
 </div>
 
@@ -639,6 +642,11 @@ function timeAgo(iso) {
 
 function dot(el, ok) {
   el.className = 'dot ' + (ok ? 'green' : 'red');
+}
+
+function toggleRecent() {
+  document.getElementById('recent-list').classList.toggle('hidden');
+  document.getElementById('recent-toggle').classList.toggle('collapsed');
 }
 
 async function fetchStats() {
