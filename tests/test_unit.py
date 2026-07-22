@@ -261,8 +261,9 @@ class TestWatchdogHandler:
         t1.join(timeout=10)
         t2.join(timeout=10)
 
-        assert set(state["failed_paths"]) == {"/a.md", "/b.md"}, (
-            f"lost an update under concurrent access: {state['failed_paths']}"
+        final_paths = state["failed_paths"]
+        assert set(final_paths) == {"/a.md", "/b.md"}, (
+            "lost an update under concurrent access: " + repr(final_paths)
         )
 
     def test_archive_modified_event_is_not_scheduled(self, tmp_path, monkeypatch):
