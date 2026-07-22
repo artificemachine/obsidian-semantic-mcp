@@ -126,6 +126,58 @@ def test_reindex_tool_returns_busy_when_lock_held(monkeypatch):
     index_vault_mock.assert_not_called()
 
 
+class _FakeLockCMAcquired:
+    """Stand-in for reindex_lock() when the lock is FREE — __enter__ reports
+    "acquired", __exit__ is a no-op."""
+
+    def __enter__(self):
+        return True
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def _stub_background_init_deps(monkeypatch):
+    """Neutralise background_init's real side effects (sleep, embed probe,
+    DB init, watcher start) so the test isolates the lock/index coupling."""
+    monkeypatch.setattr(server.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(server, "get_embed_dim", lambda: 768)
+    monkeypatch.setattr(server, "init_db", lambda *_a, **_k: None)
+    watcher_mock = MagicMock()
+    monkeypatch.setattr(server, "start_watcher", watcher_mock)
+    return watcher_mock
+
+
+def test_background_init_skips_boot_index_when_lock_held(monkeypatch):
+    """The first-boot full index must go through reindex_lock() — if an
+    operator re-index already holds the lock (another process/container),
+    background_init must NOT run a second concurrent index_vault, but it
+    must still start the watcher so live edits are picked up."""
+    watcher_mock = _stub_background_init_deps(monkeypatch)
+    monkeypatch.setattr(server, "reindex_lock", lambda: _FakeLockCM())  # held
+    index_vault_mock = MagicMock()
+    monkeypatch.setattr(server, "index_vault", index_vault_mock)
+
+    server.background_init(["/fake/vault"])
+
+    index_vault_mock.assert_not_called()          # lock held → no double index
+    watcher_mock.assert_called_once_with("/fake/vault")  # watcher still starts
+
+
+def test_background_init_indexes_under_lock_when_free(monkeypatch):
+    """When the lock is free, background_init indexes the vault (under the
+    lock) and starts the watcher."""
+    watcher_mock = _stub_background_init_deps(monkeypatch)
+    monkeypatch.setattr(server, "reindex_lock", lambda: _FakeLockCMAcquired())  # free
+    index_vault_mock = MagicMock()
+    monkeypatch.setattr(server, "index_vault", index_vault_mock)
+
+    server.background_init(["/fake/vault"])
+
+    index_vault_mock.assert_called_once_with("/fake/vault")
+    watcher_mock.assert_called_once_with("/fake/vault")
+
+
 # ── Unit (mocked): dashboard /api/reindex/status ─────────────────────────
 
 def test_reindex_status_reflects_advisory_lock(monkeypatch):

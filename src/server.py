@@ -1182,7 +1182,21 @@ def background_init(vaults: list[str]):
         embed_dim = get_embed_dim()
         init_db(embed_dim)
         for vault in vaults:
-            index_vault(vault)
+            # Route the first-boot index through the same advisory lock the
+            # reindex tool + dashboard use, so a boot index and an operator
+            # re-index can never run index_vault concurrently against a
+            # shared DB (a separate dashboard/MCP process could already hold
+            # it). If it's held, skip our index — the holder is already doing
+            # it — but always start the watcher so live edits are picked up.
+            with reindex_lock() as acquired:
+                if acquired:
+                    index_vault(vault)
+                else:
+                    log.warning(
+                        "Boot index for %s skipped — re-index already held by "
+                        "another process/container; starting watcher anyway",
+                        vault,
+                    )
             start_watcher(vault)
     except Exception as e:
         log.error("Background init failed: %s", e)
