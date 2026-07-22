@@ -31,7 +31,7 @@ OBSIDIAN_VAULT=/path/to/vault uv run python3 tests/test_setup.py   # prereq chec
 OBSIDIAN_VAULT=/path/to/vault uv run python3 tests/test_e2e.py      # end-to-end
 ```
 
-The full test suite must pass before submitting a PR (see the [Tests badge](README.md) for the current count).
+The full test suite must pass before submitting a PR (the [Tests badge](README.md) shows pass/fail status; see CI logs for the exact count).
 
 ## Code Style
 
