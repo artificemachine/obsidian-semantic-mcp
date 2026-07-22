@@ -416,10 +416,6 @@ HTML_PAGE = """<!DOCTYPE html>
     font-family: var(--sans);
     background: var(--paper); color: var(--ink); padding: 24px;
     min-height: 100vh;
-    background-image:
-      linear-gradient(to right, var(--grid) 1px, transparent 1px),
-      linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
-    background-size: 22px 22px;
   }
   h1 { font-family: var(--serif); font-weight: 500; font-size: 1.6rem; color: var(--ink); margin-bottom: 8px; }
   .subtitle { font-size: 0.85rem; color: var(--ink-soft); margin-bottom: 24px; font-style: italic; }
