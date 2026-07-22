@@ -402,11 +402,12 @@ HTML_PAGE = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,700;1,400&family=Hanken+Grotesk:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  /* Cobalt Grid palette — warm neutral paper + navy-blue ink (see
-     ../semblar/design_references/max_graphic_design_mood/cobalt_grid_01.json) */
+  /* Cobalt Grid palette, dashboard variant — cool blue-grey paper + navy-blue
+     ink (see ../semblar/design_references/max_graphic_design_mood/cobalt_grid_01.json,
+     recolored here from the source's warm-neutral paper for this UI) */
   :root {
-    --paper: #F2ECDF; --paper-2: #E7DECB; --ink: #28478C; --ink-soft: #5D78AD;
-    --grid: rgba(40,71,140,.10); --ink-faint: rgba(40,71,140,.18);
+    --paper: #E4E9F2; --paper-2: #D3DCEC; --ink: #1F3868; --ink-soft: #4F6FA8;
+    --grid: rgba(31,56,104,.10); --ink-faint: rgba(31,56,104,.18);
     --serif: 'Newsreader', Georgia, serif;
     --sans: 'Hanken Grotesk', -apple-system, sans-serif;
     --mono: 'DM Mono', ui-monospace, monospace;
