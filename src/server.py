@@ -455,6 +455,14 @@ def init_db(embed_dim: int = 768) -> None:
 
 _DIMENSION_MISMATCH_RE = re.compile(r"expected \d+ dimensions?, not \d+")
 
+# Guards the read-merge-write in _record_watcher_dimension_failure. This is an
+# in-process lock, not a cross-process one like reindex_lock: the watcher
+# (VaultEventHandler debounce timers) only ever runs inside this one
+# mcp-server process, so a plain threading.Lock is the correctly-scoped fix
+# for the intra-process lost-update race (two debounced files in the same
+# vault failing at the same time) — no advisory lock needed.
+_dimension_failure_lock = threading.Lock()
+
 
 def _record_watcher_dimension_failure(vault_id: str, path: str, error: str) -> None:
     """Merge a watcher-detected column-dimension-mismatch write failure into
@@ -467,15 +475,21 @@ def _record_watcher_dimension_failure(vault_id: str, path: str, error: str) -> N
     rather than overwriting the vault's row wholesale, so it doesn't clobber
     an unrelated "idle"/"indexing" status recorded by a concurrent boot pass.
 
+    The merge is serialized by _dimension_failure_lock so two watcher threads
+    recording failures for the same vault_id at the same time can't lose one
+    path to a lost-update race (each read-then-write must complete before the
+    next one starts).
+
     Never raises — same contract as set_index_state (observability must not
     break the caller it's called from).
     """
     try:
-        current = get_index_state(vault_id)
-        failed = list(current["failed_paths"]) if current else []
-        if path not in failed:
-            failed.append(path)
-        set_index_state(vault_id, "dimension_mismatch", failed_paths=failed, error=error)
+        with _dimension_failure_lock:
+            current = get_index_state(vault_id)
+            failed = list(current["failed_paths"]) if current else []
+            if path not in failed:
+                failed.append(path)
+            set_index_state(vault_id, "dimension_mismatch", failed_paths=failed, error=error)
     except Exception as e:
         log.warning(
             "_record_watcher_dimension_failure failed for vault_id=%s path=%s: %s",

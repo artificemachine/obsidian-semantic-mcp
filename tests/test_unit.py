@@ -212,6 +212,60 @@ class TestWatchdogHandler:
 
         record_mock.assert_not_called()
 
+    def test_concurrent_dimension_failures_do_not_lose_a_path(self, monkeypatch):
+        """Two watcher threads recording a dimension-mismatch failure for the
+        SAME vault_id but different paths, at the same time, must not lose
+        either path — the read-merge-write in
+        _record_watcher_dimension_failure must be serialized (a plain
+        read-then-write with no lock loses whichever write finishes first)."""
+        import threading
+        import server
+
+        state = {"failed_paths": []}
+        state_lock = threading.Lock()  # guards the fake DB only, not the code under test
+        release_first_write = threading.Event()
+        first_reader_is_waiting = threading.Event()
+
+        call_count = {"n": 0}
+
+        def fake_get_index_state(vault_id):
+            with state_lock:
+                return {"failed_paths": list(state["failed_paths"])}
+
+        def fake_set_index_state(vault_id, status, *, failed_paths=None, error=None):
+            call_count["n"] += 1
+            # Force the SECOND call (the second thread's write) to interleave
+            # between the first thread's read and write, reproducing the race
+            # a lock would prevent.
+            if call_count["n"] == 1:
+                first_reader_is_waiting.set()
+                release_first_write.wait(timeout=5)
+            with state_lock:
+                state["failed_paths"] = list(failed_paths or [])
+
+        monkeypatch.setattr(server, "get_index_state", fake_get_index_state)
+        monkeypatch.setattr(server, "set_index_state", fake_set_index_state)
+
+        def thread_a():
+            server._record_watcher_dimension_failure("vault1", "/a.md", "expected 768 dimensions, not 1024")
+
+        def thread_b():
+            first_reader_is_waiting.wait(timeout=5)
+            server._record_watcher_dimension_failure("vault1", "/b.md", "expected 768 dimensions, not 1024")
+            release_first_write.set()
+
+        t1 = threading.Thread(target=thread_a)
+        t2 = threading.Thread(target=thread_b)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        final_paths = state["failed_paths"]
+        assert set(final_paths) == {"/a.md", "/b.md"}, (
+            "lost an update under concurrent access: " + repr(final_paths)
+        )
+
     def test_archive_modified_event_is_not_scheduled(self, tmp_path, monkeypatch):
         """Archive changes must be ignored before debounce scheduling."""
         import server
