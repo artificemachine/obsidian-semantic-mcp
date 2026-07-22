@@ -159,6 +159,59 @@ class TestWatchdogHandler:
             handler = server.VaultEventHandler()
             handler._handle_upsert(f.name)  # must not raise
 
+    def test_dimension_mismatch_write_failure_recorded_in_index_state(self, monkeypatch):
+        """A watcher write that fails with a pgvector dimension error must be
+        recorded in index_state (dashboard-visible), not just logged — the
+        boot-time dimension_mismatch check only runs once at startup, so an
+        edit made afterward that fails the same way was previously silent
+        beyond a per-file log.warning."""
+        import psycopg2
+        import server
+
+        def boom(path, content, vault_id=""):
+            raise psycopg2.errors.DataException("expected 768 dimensions, not 1024")
+        monkeypatch.setattr(server, "index_note", boom)
+
+        record_mock = MagicMock()
+        monkeypatch.setattr(server, "_record_watcher_dimension_failure", record_mock)
+
+        with tempfile.NamedTemporaryFile(suffix=".md") as f:
+            f.write(b"# test\n")
+            f.flush()
+            handler = server.VaultEventHandler(vault_id="myvault")
+            handler._handle_upsert(f.name)  # must not raise
+
+        record_mock.assert_called_once()
+        args, _ = record_mock.call_args
+        assert args[0] == "myvault"
+        assert args[1] == f.name
+        assert "dimensions" in args[2]
+
+    def test_empty_embedding_data_exception_does_not_call_recorder(self, monkeypatch):
+        """A DataException for a genuinely empty embedding ('vector must have
+        at least 1 dimension' — a different bug class, an empty embed()
+        result) must NOT be misrouted into the column-dimension-mismatch
+        recorder. Only the specific 'expected N dimensions, not M' pgvector
+        column-mismatch phrasing should trigger it — a bare 'dimension'
+        substring match would wrongly conflate the two."""
+        import psycopg2
+        import server
+
+        def boom(path, content, vault_id=""):
+            raise psycopg2.errors.DataException("vector must have at least 1 dimension")
+        monkeypatch.setattr(server, "index_note", boom)
+
+        record_mock = MagicMock()
+        monkeypatch.setattr(server, "_record_watcher_dimension_failure", record_mock)
+
+        with tempfile.NamedTemporaryFile(suffix=".md") as f:
+            f.write(b"# test\n")
+            f.flush()
+            handler = server.VaultEventHandler()
+            handler._handle_upsert(f.name)  # must not raise
+
+        record_mock.assert_not_called()
+
     def test_archive_modified_event_is_not_scheduled(self, tmp_path, monkeypatch):
         """Archive changes must be ignored before debounce scheduling."""
         import server
@@ -1541,3 +1594,52 @@ class TestEnsureFrontmatter:
         for line in fm_block.splitlines():
             if line.startswith("created:") or line.startswith("updated:"):
                 assert "'" not in line and '"' not in line
+
+
+# ── Perf / stress: bulk vault indexing overhead ──────────────────────────────
+
+class TestIndexVaultPerf:
+    """Throughput test for index_vault()'s own orchestration (file-walk, hash
+    lookup, link-index build) at a vault size representative of real usage.
+
+    embed()/DB writes are mocked out (_run_embed_pass replaced with a fast
+    no-op, _bulk_load_hashes forced to report everything unchanged) so this
+    isolates the CPU-bound work index_vault does per file from network/DB
+    latency, which would otherwise dominate and make the timing assertion
+    meaningless. A regression that makes file-walk/hash/link-build scale
+    worse than roughly linear (e.g. an accidentally-quadratic wikilink
+    resolution) would blow well past this bound even with I/O removed."""
+
+    @pytest.mark.perf
+    def test_index_vault_scales_linearly_with_note_count(self, tmp_path, monkeypatch):
+        import time
+        import server
+
+        note_count = 300
+        for i in range(note_count):
+            # Every 5th note links to the previous one, so _build_link_index
+            # + _resolve_links do real (if small) wikilink-resolution work
+            # rather than a degenerate no-links case.
+            body = f"# Note {i}\n"
+            if i % 5 == 0 and i > 0:
+                body += f"See [[note-{i - 1}]] for context.\n"
+            (tmp_path / f"note-{i}.md").write_text(body, encoding="utf-8")
+
+        monkeypatch.setenv("OBSIDIAN_IGNORE_PATHS", "")
+        monkeypatch.setattr(server, "VAULT_PATH", str(tmp_path))
+        monkeypatch.setattr(server, "_VAULT_LIST", [str(tmp_path)])
+        monkeypatch.setattr(server, "_bulk_load_hashes", lambda paths: {})
+        monkeypatch.setattr(server, "_run_embed_pass", lambda batch, vault: [])
+
+        start = time.perf_counter()
+        server.index_vault(str(tmp_path))
+        elapsed = time.perf_counter() - start
+
+        # Generous bound for CI runner variance — this is a regression guard
+        # against a scaling blowup, not a strict latency SLA (none is claimed
+        # anywhere in README/docs).
+        assert elapsed < 10.0, (
+            f"index_vault() took {elapsed:.2f}s for {note_count} notes with "
+            f"embed/DB mocked out — expected well under 10s for file-walk + "
+            f"hash + link-index overhead alone"
+        )

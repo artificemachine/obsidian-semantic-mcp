@@ -453,6 +453,36 @@ def init_db(embed_dim: int = 768) -> None:
             set_index_state(vp, "dimension_mismatch", error=mismatch_error)
 
 
+_DIMENSION_MISMATCH_RE = re.compile(r"expected \d+ dimensions?, not \d+")
+
+
+def _record_watcher_dimension_failure(vault_id: str, path: str, error: str) -> None:
+    """Merge a watcher-detected column-dimension-mismatch write failure into
+    index_state, so it's dashboard-visible instead of only a log line.
+
+    The boot-time check in init_db() only runs once at startup; an edit made
+    afterward that fails with the same pgvector column-dimension error was
+    previously silent beyond a per-file log.warning in _handle_upsert. This
+    does a read-merge-write against the existing failed_paths list (deduping)
+    rather than overwriting the vault's row wholesale, so it doesn't clobber
+    an unrelated "idle"/"indexing" status recorded by a concurrent boot pass.
+
+    Never raises — same contract as set_index_state (observability must not
+    break the caller it's called from).
+    """
+    try:
+        current = get_index_state(vault_id)
+        failed = list(current["failed_paths"]) if current else []
+        if path not in failed:
+            failed.append(path)
+        set_index_state(vault_id, "dimension_mismatch", failed_paths=failed, error=error)
+    except Exception as e:
+        log.warning(
+            "_record_watcher_dimension_failure failed for vault_id=%s path=%s: %s",
+            vault_id, path, e,
+        )
+
+
 def _row_to_index_state_dict(row: tuple) -> dict:
     vault_id, status, started_at, finished_at, failed_paths, error = row
     return {
@@ -1061,6 +1091,15 @@ class VaultEventHandler(FileSystemEventHandler):
             # thread — the same defect class this iteration fixes below in
             # on_deleted/on_moved, just reached via a different trigger.
             _safe_delete_note(path)
+        except psycopg2.errors.DataException as e:
+            if _DIMENSION_MISMATCH_RE.search(str(e)):
+                log.error(
+                    "Watcher: column-dimension mismatch writing %s — recording "
+                    "in index_state: %s", path, e,
+                )
+                _record_watcher_dimension_failure(self._vault_id, path, str(e))
+            else:
+                log.warning("Watcher: skipped %s: %s", path, e)
         except Exception as e:
             log.warning("Watcher: skipped %s: %s", path, e)
 

@@ -28,7 +28,7 @@ import os
 import sys
 import threading
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 import requests
@@ -176,6 +176,38 @@ def test_background_init_indexes_under_lock_when_free(monkeypatch):
 
     index_vault_mock.assert_called_once_with("/fake/vault")
     watcher_mock.assert_called_once_with("/fake/vault")
+
+
+def test_background_init_acquires_lock_independently_per_vault(monkeypatch):
+    """Regression guard for a future refactor accidentally hoisting the lock
+    acquire outside the per-vault loop: with 3 vaults where the lock is
+    free/held/free in sequence, each vault's index_vault call must depend
+    ONLY on that vault's own acquire result, not a single acquire() reused
+    (or its busy state leaking) across the whole vault list. The watcher
+    must still start for every vault regardless of lock outcome."""
+    watcher_mock = _stub_background_init_deps(monkeypatch)
+
+    # A fresh CM per call, cycling free/held/free — proves reindex_lock() is
+    # invoked once per vault (call_count == 3), not once for the whole loop.
+    lock_results = [_FakeLockCMAcquired(), _FakeLockCM(), _FakeLockCMAcquired()]
+    reindex_lock_mock = MagicMock(side_effect=lock_results)
+    monkeypatch.setattr(server, "reindex_lock", reindex_lock_mock)
+
+    index_vault_mock = MagicMock()
+    monkeypatch.setattr(server, "index_vault", index_vault_mock)
+
+    vaults = ["/fake/vault-a", "/fake/vault-b", "/fake/vault-c"]
+    server.background_init(vaults)
+
+    assert reindex_lock_mock.call_count == 3
+    index_vault_mock.assert_has_calls(
+        [call("/fake/vault-a"), call("/fake/vault-c")], any_order=False
+    )
+    assert index_vault_mock.call_count == 2  # vault-b's held lock skipped it
+    assert watcher_mock.call_count == 3
+    watcher_mock.assert_has_calls(
+        [call("/fake/vault-a"), call("/fake/vault-b"), call("/fake/vault-c")]
+    )
 
 
 # ── Unit (mocked): dashboard /api/reindex/status ─────────────────────────
