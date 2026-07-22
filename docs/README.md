@@ -48,4 +48,4 @@ Dated engineering records of production failures and their fixes. Evidence of ho
 
 ## Audits
 
-`audits/` holds dated job-readiness audit reports (`<date>-job-ready.md`, `<date>-production-ready.md`, `<date>-portfolio-ready.md` — the audit command evolved through those names) and their progress trackers. Internal QA output — useful history, not user documentation.
+`audits/` holds dated go-live readiness audit reports (`<date>-job-ready.md`, `<date>-production-ready.md`, `<date>-portfolio-ready.md`, `<date>-golive.md` — the audit command evolved through those names, now `/golive`) and their progress trackers. Internal QA output — useful history, not user documentation.

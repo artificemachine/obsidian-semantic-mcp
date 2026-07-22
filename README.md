@@ -482,7 +482,7 @@ OBSIDIAN_VAULT="/path/to/your/vault" uv run python3 src/dashboard.py
 uv run pytest -q
 ```
 
-Runs 400+ tests (see the Tests badge above for the current count). Most run without a database. A set of PostgreSQL integration tests are gated behind a `pg` marker and run in CI against a pgvector service. Coverage spans embedding, search, vault path safety, connection pool, dashboard auth, cross-process locking, schema migrations, the osm CLI wizard, and CI governance.
+Runs 400+ tests (see CI logs for the exact count — the Tests badge above shows pass/fail status, not a number). Most run without a database. A set of PostgreSQL integration tests are gated behind a `pg` marker and run in CI against a pgvector service. Coverage spans embedding, search, vault path safety, connection pool, dashboard auth, cross-process locking, schema migrations, the osm CLI wizard, and CI governance.
 
 ### `test_dashboard_smoke.py` — Dashboard health checks (Docker stack)
 
