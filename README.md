@@ -465,7 +465,7 @@ A built-in dashboard is available at http://localhost:8484 (started automaticall
 
 - Service health (PostgreSQL, Ollama, embedding model)
 - Indexed notes count, vault coverage, DB size
-- Recently indexed files
+- Recently indexed files (collapsible — click the heading to hide/show)
 - **Re-index** — incremental re-index (skips unchanged notes, fast)
 - **Clear & Rebuild** — wipes all embeddings and re-indexes from scratch
 - A "Start Ollama" button if Ollama is down
