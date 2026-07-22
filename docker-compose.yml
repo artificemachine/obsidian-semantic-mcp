@@ -33,7 +33,7 @@ services:
     networks: [obsidian-internal]
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:latest@sha256:6345fbc18bd73a1e16404be681dbc6fd291a027cab43ed541abe78c4c81051b0
     profiles: [full-docker]
     restart: unless-stopped
     volumes:
@@ -62,7 +62,7 @@ services:
 
   # One-shot container to pull the embedding model if missing
   ollama-pull:
-    image: ollama/ollama:latest
+    image: ollama/ollama:latest@sha256:6345fbc18bd73a1e16404be681dbc6fd291a027cab43ed541abe78c4c81051b0
     profiles: [full-docker]
     depends_on:
       ollama:

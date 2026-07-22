@@ -54,6 +54,7 @@ packages = ["src"]
 testpaths = ["tests"]
 markers = [
     "pg: requires a live PostgreSQL *_test database (see tests/conftest.py pg fixture); excluded by `-m \"not pg\"`",
+    "perf: measures throughput/latency of bulk vault operations under load with a timing assertion; embed/DB calls are mocked so it exercises only index_vault's own file-walk/hash/link-build orchestration",
 ]
 
 [tool.coverage.run]

@@ -22,3 +22,17 @@ updates:
       - "ci"
     commit-message:
       prefix: "chore(ci)"
+
+  # Docker base images — Dockerfile/Dockerfile.dashboard's `uv` COPY --from=
+  # and docker-compose.yml's `ollama/ollama` are pinned to a digest for
+  # reproducible builds; same stale-by-design risk as the Actions pins above
+  # without an updater to bump the digest when a new image is published.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "chore(docker)"
