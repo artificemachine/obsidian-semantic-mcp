@@ -7,6 +7,8 @@
 
 A persistent memory layer for Claude Desktop — semantic search across your entire Obsidian vault using local embeddings and PostgreSQL + pgvector.
 
+![Monitoring dashboard — live stats, recent indexing activity, and semantic search test panel](images/osm-dashboard-ui.png)
+
 ## The Problem
 
 AI assistants forget everything between sessions. You repeat context, lose continuity, and start from zero every time. Your notes, projects, and preferences sit in Obsidian but never make it into your AI conversations automatically.
