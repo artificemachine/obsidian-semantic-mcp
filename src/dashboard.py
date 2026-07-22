@@ -426,7 +426,6 @@ HTML_PAGE = """<!DOCTYPE html>
   }
   .card {
     background: var(--paper-2); border-radius: 4px; padding: 20px;
-    border: 1.5px solid var(--ink);
   }
   .card-label { font-family: var(--sans); font-size: 0.75rem; text-transform: uppercase;
     letter-spacing: 0.08em; color: var(--ink-soft); font-weight: 600; margin-bottom: 8px; }
@@ -438,7 +437,7 @@ HTML_PAGE = """<!DOCTYPE html>
   .status {
     display: flex; align-items: center; gap: 8px;
     font-size: 0.9rem; background: var(--paper-2); padding: 10px 16px;
-    border-radius: 4px; border: 1.5px solid var(--ink);
+    border-radius: 4px;
   }
   .dot {
     width: 10px; height: 10px; border-radius: 50%;
@@ -449,7 +448,7 @@ HTML_PAGE = """<!DOCTYPE html>
   .dot.yellow { background: #eab308; box-shadow: 0 0 6px #eab30880; }
   .dot.grey   { background: #9a9488; }
   .recent { background: var(--paper-2); border-radius: 4px; padding: 20px;
-    border: 1.5px solid var(--ink); margin-bottom: 24px; }
+    margin-bottom: 24px; }
   .recent h2 { font-family: var(--serif); font-weight: 500; font-size: 1.15rem; color: var(--ink); margin-bottom: 12px; }
   .recent-item {
     display: flex; justify-content: space-between; padding: 6px 0;
@@ -489,7 +488,7 @@ HTML_PAGE = """<!DOCTYPE html>
   @keyframes spin { to { transform: rotate(360deg); } }
   .search-panel {
     background: var(--paper-2); border-radius: 4px; padding: 20px;
-    border: 1.5px solid var(--ink); margin-bottom: 24px;
+    margin-bottom: 24px;
   }
   .search-panel h2 { font-family: var(--serif); font-weight: 500; font-size: 1.15rem; color: var(--ink); margin-bottom: 14px; }
   .search-controls {
