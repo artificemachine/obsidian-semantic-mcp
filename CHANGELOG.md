@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+- 2026-08-06: fix(transport): make stdio EOF terminal and add a Codex-safe
+  per-session Docker launcher. File-lock leases replace PID-based orphan
+  detection so PID namespaces cannot make one Codex session reap another;
+  installed launchers resolve only standard XDG paths or live Compose state.
 - 2026-07-21: docs(agents): add GEMINI.md agent home for Gemini CLI. Completes the agent-instruction-files trio (CLAUDE.md, AGENTS.md, GEMINI.md) per global rule 19.
 - 2026-07-21: docs(audit): record 2026-07-21 production-ready audit (docs/audits/2026-07-21-production-ready.md). Verdict: READY → strict READY once the 4 follow-up PRs in this release land.
 - 2026-07-21: feat(osm-init): auto-generate DASHBOARD_TOKEN into .env so Docker installs no longer get an invisible ephemeral container-side token. `_generate_dashboard_token()` mirrors `config.resolve_dashboard_token()` precedence (env > `~/.config/obsidian-semantic-mcp/dashboard_token` > `secrets.token_urlsafe(32)`); `write_env()` takes an optional `dashboard_token=` kwarg. Closes the install gap surfaced during the v0.15.0 upgrade on this machine. TDD: 2 new tests in TestWriteEnv. Suite 444→446, 0 fail. (v0.15.1)

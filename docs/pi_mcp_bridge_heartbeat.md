@@ -1,5 +1,9 @@
 # pi mcp-bridge: Heartbeat Must Start at Spawn Time
 
+> **Historical workaround:** current releases offload blocking stdin reads to
+> a worker thread, so the asyncio event loop no longer depends on blank-line
+> heartbeats. Existing heartbeat-enabled pi configurations remain compatible.
+
 **Affects:** [earendil-works/pi](https://github.com/earendil-works/pi) with the
 community `mcp-bridge.ts` extension.
 

@@ -31,6 +31,39 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_server_exits_when_stdio_reaches_eof(tmp_path):
+    """EOF on an anonymous MCP pipe is terminal and must not leak a process."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    env = os.environ.copy()
+    env["OBSIDIAN_VAULT"] = str(vault)
+    env["DATABASE_URL"] = "postgresql://unused:unused@127.0.0.1:1/unused"
+    env["OSM_DOCKER"] = "0"
+    env["PYTHONUNBUFFERED"] = "1"
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "src.launcher"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        cwd=REPO_ROOT,
+    )
+    assert proc.stdin is not None
+    proc.stdin.close()
+    proc.stdin = None
+
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+        pytest.fail("server stayed alive after terminal stdin EOF")
+
+    assert proc.returncode == 0, proc.stderr.read().decode(errors="replace")
+
+
 def _initialize_request() -> bytes:
     return (
         json.dumps(

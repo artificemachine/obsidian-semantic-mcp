@@ -59,12 +59,22 @@ ln -sf "$INSTALL_DIR/scripts/osm" "$BIN_DIR/osm"
 chmod +x "$INSTALL_DIR/scripts/osm"
 ok "Linked: $BIN_DIR/osm"
 
+# Optional per-session Docker launcher used by Codex and other clients that
+# need isolation from the shared mcp-server container. The symlink points only
+# into the installation root, never a development checkout.
+ln -sf "$INSTALL_DIR/scripts/obsidian-semantic-mcp-session" \
+    "$BIN_DIR/obsidian-semantic-mcp-session"
+chmod +x "$INSTALL_DIR/scripts/obsidian-semantic-mcp-session"
+ok "Linked: $BIN_DIR/obsidian-semantic-mcp-session"
+
 # PATH hint (non-fatal — wizard still runs via full path)
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *)
         warn "$BIN_DIR is not in your PATH."
         info "Add this line to your shell profile (.zshrc / .bashrc):"
+        # Keep $PATH literal in the shell-profile instruction shown to users.
+        # shellcheck disable=SC2016
         printf '\n    export PATH="%s:$PATH"\n\n' "$BIN_DIR"
         ;;
 esac
