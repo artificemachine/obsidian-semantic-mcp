@@ -70,3 +70,8 @@ nul
 
 # Active session handoff — working state, not public documentation
 HANDOFF.md
+
+# ── /to-agents backup files ──
+# Duplicates what git history already preserves; never commit these.
+.to-agents/
+*.bak-to-agents-*
