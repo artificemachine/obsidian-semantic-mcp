@@ -27,4 +27,7 @@ fi
 
 # Delegate to the Python launcher — handles Docker mode and env validation.
 export OSM_PROJECT_ROOT="${OSM_PROJECT_ROOT:-$PROJECT_ROOT}"
+# Docker mode is opt-in; waiting for a compose service can exceed MCP startup limits.
+export OSM_DOCKER="${OSM_DOCKER:-0}"
+cd "$PROJECT_ROOT"
 exec "$PYTHON_BIN" -m src.launcher "$@"
