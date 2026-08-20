@@ -2100,12 +2100,8 @@ async def main():
         daemon=True,
     ).start()
 
-    # Raw stdin/stdout transport — avoids two known bugs:
-    #   1. anyio.wrap_file() EOF death (May 7 2026): anyio's async-for over
-    #      stdin exits when the client closes stdin between cycles, taking
-    #      the server down. Solved by using a blocking readline that
-    #      waits forever and treats EOF as "idle, retry."
-    #   2. Blocking-loop event-loop freeze (May 8 2026): a synchronous
+    # Raw stdin/stdout transport avoids the blocking-loop event-loop freeze
+    # found in May 2026: a synchronous
     #      `for line in sys.stdin.buffer:` in an async coroutine blocks
     #      the entire asyncio event loop, so `_stdout_writer` cannot
     #      schedule and the response is never written. Symptom: Claude
@@ -2123,12 +2119,12 @@ async def main():
                 # stays free for _stdout_writer and server.run.
                 line = await anyio.to_thread.run_sync(sys.stdin.buffer.readline)
                 if not line:
-                    # EOF: stdin closed. Don't exit — Claude Desktop
-                    # closes stdin between cycles. Sleep briefly and
-                    # retry; the thread offload will block in-thread
-                    # until new data arrives or stdin is fully gone.
-                    await anyio.sleep(0.1)
-                    continue
+                    # EOF is terminal for an anonymous stdio pipe. It cannot
+                    # receive data again, so close the MCP input stream and let
+                    # server.run() shut down. Retrying here leaked one server
+                    # (and, in Docker mode, one container) every time Codex
+                    # retired or restarted an MCP client.
+                    break
                 line_str = line.decode("utf-8").strip()
                 if not line_str:
                     continue

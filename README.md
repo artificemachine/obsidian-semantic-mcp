@@ -138,10 +138,20 @@ It then:
 
 Restart Claude Desktop / OpenCode to pick up the new server. For Claude Code CLI, the entry is registered live; verify with `claude mcp list`. For pi, run `/reload` inside an active session or restart pi.
 
-> **pi users:** `osm init` also patches `~/.pi/agent/extensions/mcp-bridge.ts` if
-> present. obsidian-semantic requires `heartbeat: true` and a spawn-time heartbeat
-> in the bridge due to its blocking asyncio stdin transport. See
-> [`docs/pi_mcp_bridge_heartbeat.md`](docs/pi_mcp_bridge_heartbeat.md) for details.
+For Codex installations that need a separate Docker memory cgroup per MCP
+client, configure the installed `obsidian-semantic-mcp-session` command as the
+STDIO launcher. Put deployment-specific values in
+`~/.config/obsidian-semantic-mcp/bridge.env` when auto-discovery from the
+running Compose service is not sufficient; the launcher never reads a
+development checkout or copies its credential file. Its file-lock leases
+remain valid across Codex PID namespaces, so starting one Codex session cannot
+reap another session's live container.
+
+> **pi users:** older obsidian-semantic releases required `heartbeat: true` in
+> the community bridge. Current releases offload stdin reads and no longer
+> require heartbeats for event-loop progress. See
+> [`docs/pi_mcp_bridge_heartbeat.md`](docs/pi_mcp_bridge_heartbeat.md) for the
+> compatibility history.
 
 > **Manual config (only if `osm init` could not detect your client)**
 >

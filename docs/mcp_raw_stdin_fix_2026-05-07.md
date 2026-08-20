@@ -1,5 +1,11 @@
 # MCP Raw Stdin Fix — 2026-05-07
 
+> **Superseded lifecycle note (2026-08-06):** an EOF on an anonymous stdio
+> pipe is terminal; that pipe cannot reopen. Retrying `readline()` after EOF
+> leaked servers and per-session Docker containers, and an attempted PID-based
+> reaper then terminated live Codex sessions across PID namespaces. The server
+> now retains the non-blocking thread offload but exits cleanly on EOF.
+
 ## Symptom
 
 OpenCode shows obsidian-semantic as `failed` with `MCP error -32000: Connection closed`. No process running despite Docker container being healthy. Claude Desktop shows the server dying after ~30s–3min with "Server transport closed unexpectedly, process exiting early."

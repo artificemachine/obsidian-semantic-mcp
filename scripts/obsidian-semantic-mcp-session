@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# Isolated stdio launcher for clients that need one memory cgroup per session.
+#
+# Configuration is loaded from standard install/config locations only:
+#   $OSM_BRIDGE_ENV (explicit override)
+#   $XDG_CONFIG_HOME/obsidian-semantic-mcp/bridge.env
+#   $XDG_DATA_HOME/obsidian-semantic-mcp/.env
+set -euo pipefail
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+BRIDGE_ENV="${OSM_BRIDGE_ENV:-$CONFIG_HOME/obsidian-semantic-mcp/bridge.env}"
+
+if [[ -r "$BRIDGE_ENV" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$BRIDGE_ENV"
+    set +a
+elif [[ -r "$DATA_HOME/obsidian-semantic-mcp/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$DATA_HOME/obsidian-semantic-mcp/.env"
+    set +a
+fi
+
+DOCKER_BIN="${DOCKER_BIN:-docker}"
+BRIDGE_IMAGE="${OSM_BRIDGE_IMAGE:-newblacc/obsidian-semantic-mcp:${OSM_VERSION:-latest}}"
+BRIDGE_PROJECT="${OSM_BRIDGE_PROJECT:-obsidian-semantic-mcp}"
+BRIDGE_NETWORK="${OSM_BRIDGE_NETWORK:-}"
+VAULT_SOURCE="${OSM_BRIDGE_VAULT_SOURCE:-${OBSIDIAN_VAULT:-}}"
+VAULT_TYPE="${OSM_BRIDGE_VAULT_TYPE:-}"
+BRIDGE_MEMORY="${OSM_BRIDGE_MEMORY:-768m}"
+BRIDGE_MEMORY_SWAP="${OSM_BRIDGE_MEMORY_SWAP:-1536m}"
+LEASE_DIR="$CACHE_HOME/obsidian-semantic-mcp/leases"
+
+fail() {
+    printf 'obsidian-semantic-mcp-session: %s\n' "$*" >&2
+    exit 1
+}
+
+command -v "$DOCKER_BIN" >/dev/null 2>&1 || fail "docker executable not found: $DOCKER_BIN"
+command -v flock >/dev/null 2>&1 || fail "flock is required for session leases"
+
+# Reuse the running compose service as runtime authority when explicit config
+# is absent. This discovers only topology and the already-loaded database
+# password; it never reads a repository path or duplicates a credential file.
+SERVICE_IDS="$($DOCKER_BIN ps \
+    --filter "label=com.docker.compose.project=$BRIDGE_PROJECT" \
+    --filter label=com.docker.compose.service=mcp-server \
+    --format '{{.ID}}' 2>/dev/null || true)"
+SERVICE_ID="${SERVICE_IDS%%$'\n'*}"
+
+if [[ -n "$SERVICE_ID" ]]; then
+    service_env="$($DOCKER_BIN inspect \
+        --format '{{range .Config.Env}}{{println .}}{{end}}' "$SERVICE_ID" 2>/dev/null || true)"
+    if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
+        POSTGRES_PASSWORD="$(awk -F= \
+            '$1 == "POSTGRES_PASSWORD" {sub(/^[^=]*=/, ""); print; exit}' \
+            <<<"$service_env")"
+    fi
+    if [[ -z "${OLLAMA_URL:-}" ]]; then
+        OLLAMA_URL="$(awk -F= \
+            '$1 == "OLLAMA_URL" {sub(/^[^=]*=/, ""); print; exit}' \
+            <<<"$service_env")"
+    fi
+    if [[ -z "$VAULT_SOURCE" ]]; then
+        mount_info="$($DOCKER_BIN inspect \
+            --format '{{range .Mounts}}{{if eq .Destination "/vault"}}{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}' \
+            "$SERVICE_ID" 2>/dev/null || true)"
+        VAULT_TYPE="${mount_info%%|*}"
+        mount_rest="${mount_info#*|}"
+        mount_name="${mount_rest%%|*}"
+        mount_source="${mount_rest#*|}"
+        if [[ "$VAULT_TYPE" == "volume" ]]; then
+            VAULT_SOURCE="$mount_name"
+        else
+            VAULT_SOURCE="$mount_source"
+        fi
+    fi
+    if [[ -z "$BRIDGE_NETWORK" ]]; then
+        # Go-template variables are intentionally protected from the shell.
+        # shellcheck disable=SC2016
+        network_names="$($DOCKER_BIN inspect \
+            --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
+            "$SERVICE_ID" 2>/dev/null || true)"
+        BRIDGE_NETWORK="${network_names%%$'\n'*}"
+    fi
+fi
+
+BRIDGE_NETWORK="${BRIDGE_NETWORK:-obsidian-semantic-mcp_obsidian-internal}"
+VAULT_TYPE="${VAULT_TYPE:-bind}"
+[[ -n "${POSTGRES_PASSWORD:-}" ]] || fail "POSTGRES_PASSWORD is not configured and no compose service was discoverable"
+[[ -n "$VAULT_SOURCE" ]] || fail "set OSM_BRIDGE_VAULT_SOURCE or run the compose mcp-server"
+[[ "$VAULT_TYPE" == "bind" || "$VAULT_TYPE" == "volume" ]] \
+    || fail "OSM_BRIDGE_VAULT_TYPE must be bind or volume"
+
+umask 077
+mkdir -p "$LEASE_DIR"
+chmod 700 "$LEASE_DIR"
+
+lease_is_live() {
+    local lease_id="$1"
+    local lease_path="$LEASE_DIR/$lease_id.lock"
+    local probe_fd
+
+    [[ "$lease_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+        || return 0  # Unknown ownership format: preserve it.
+    [[ -e "$lease_path" ]] || return 1
+
+    exec {probe_fd}>>"$lease_path"
+    if flock -n "$probe_fd"; then
+        flock -u "$probe_fd"
+        eval "exec ${probe_fd}>&-"
+        return 1
+    fi
+    eval "exec ${probe_fd}>&-"
+    return 0
+}
+
+reap_expired_leases() {
+    local id lease_id
+    while IFS= read -r id; do
+        [[ -n "$id" ]] || continue
+        lease_id="$($DOCKER_BIN inspect \
+            --format '{{index .Config.Labels "osm.lease-id"}}' "$id" 2>/dev/null || true)"
+        if ! lease_is_live "$lease_id"; then
+            "$DOCKER_BIN" rm -f "$id" >/dev/null 2>&1 || true
+            rm -f -- "$LEASE_DIR/$lease_id.lock"
+        fi
+    done < <("$DOCKER_BIN" ps -a --filter label=osm.session-bridge=2 \
+        --format '{{.ID}}' 2>/dev/null || true)
+}
+
+reap_expired_leases
+
+LEASE_ID="$(tr 'A-F' 'a-f' < /proc/sys/kernel/random/uuid)"
+LEASE_PATH="$LEASE_DIR/$LEASE_ID.lock"
+exec {LEASE_FD}>"$LEASE_PATH"
+flock -n "$LEASE_FD" || fail "could not acquire session lease"
+
+NAME="osm-bridge-$LEASE_ID"
+DOCKER_PID=""
+CLEANED=0
+
+# Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2329
+cleanup() {
+    local rc=$?
+    [[ "$CLEANED" -eq 0 ]] || return "$rc"
+    CLEANED=1
+    trap - EXIT HUP INT TERM PIPE
+    "$DOCKER_BIN" rm -f "$NAME" >/dev/null 2>&1 || true
+    if [[ "$DOCKER_PID" =~ ^[0-9]+$ ]]; then
+        wait "$DOCKER_PID" 2>/dev/null || true
+    fi
+    flock -u "$LEASE_FD" 2>/dev/null || true
+    eval "exec ${LEASE_FD}>&-"
+    rm -f -- "$LEASE_PATH"
+    return "$rc"
+}
+
+# Invoked indirectly by signal traps.
+# shellcheck disable=SC2329
+on_signal() {
+    exit 143
+}
+
+trap cleanup EXIT
+trap on_signal HUP INT TERM PIPE
+
+if [[ "$VAULT_TYPE" == "volume" ]]; then
+    VAULT_MOUNT="type=volume,src=$VAULT_SOURCE,dst=/vault"
+else
+    VAULT_MOUNT="type=bind,src=$VAULT_SOURCE,dst=/vault"
+fi
+
+export POSTGRES_PASSWORD
+export OLLAMA_URL="${OLLAMA_URL:-http://ollama:11434}"
+
+# Keep an explicit copy of the MCP client's stdin: non-interactive Bash would
+# otherwise redirect a background job's stdin from /dev/null.
+exec 3<&0
+"$DOCKER_BIN" run --rm -i --init --name "$NAME" \
+    --network "$BRIDGE_NETWORK" \
+    --memory "$BRIDGE_MEMORY" --memory-swap "$BRIDGE_MEMORY_SWAP" \
+    --label osm.session-bridge=2 \
+    --label "osm.lease-id=$LEASE_ID" \
+    -e OBSIDIAN_VAULT=/vault \
+    -e POSTGRES_HOST="${POSTGRES_HOST:-postgres}" \
+    -e POSTGRES_PORT="${POSTGRES_PORT:-5432}" \
+    -e POSTGRES_DB="${POSTGRES_DB:-obsidian_brain}" \
+    -e POSTGRES_USER="${POSTGRES_USER:-obsidian}" \
+    -e POSTGRES_PASSWORD \
+    -e OLLAMA_URL \
+    -e EMBEDDING_MODEL="${EMBEDDING_MODEL:-nomic-embed-text}" \
+    --mount "$VAULT_MOUNT" \
+    "$BRIDGE_IMAGE" python3 src/server.py <&3 &
+DOCKER_PID="$!"
+
+set +e
+wait "$DOCKER_PID"
+rc=$?
+set -e
+exit "$rc"
