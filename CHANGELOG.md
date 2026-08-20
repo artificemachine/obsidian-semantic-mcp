@@ -423,3 +423,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 2026-07-22: docs(readme): mention the Recently Indexed panel is collapsible — a real, shipped, tested feature (#48) that was only documented in CHANGELOG until now.
 - 2026-07-22: chore(release): bump pyproject.toml version 0.16.2 -> 0.16.3, packaging the 3 unreleased commits since v0.16.2: collapsible dashboard panel (#48), sanitized README screenshot (#49), and the dimension-failure race fix + README collapsible-panel doc (#50). uv.lock regenerated to match.
 - 2026-08-20: chore: default OSM_DOCKER to 0 (opt-in) in the osm launcher wrapper and cd into PROJECT_ROOT before exec, ignore /to-agents backup files in .gitignore, add tessera-mcp CaaS static review and 2026-07-22 golive audit docs.
+- 2026-08-20: chore(release): bump pyproject.toml version 0.16.3 -> 0.16.4, packaging the OSM_DOCKER opt-in default, to-agents gitignore rule, and audit docs from #54. uv.lock regenerated to match.
