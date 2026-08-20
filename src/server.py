@@ -52,7 +52,13 @@ import yaml
 from mcp.server import Server
 import anyio
 from mcp.shared.message import SessionMessage
-from mcp.types import Tool, TextContent, JSONRPCMessage
+from mcp.types import (
+    Tool,
+    TextContent,
+    jsonrpc_message_adapter,
+    ListToolsResult,
+    CallToolResult,
+)
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
@@ -1417,10 +1423,6 @@ def _relative(abspath: Path) -> str:
 
 # ───────────────────────────────── MCP Server ────────────────────────────────
 
-server = Server("obsidian-semantic")
-
-
-@server.list_tools()
 async def list_tools():
     return [
         Tool(
@@ -1639,7 +1641,6 @@ async def list_tools():
 
 # SECURITY: MCP protocol has no built-in auth. Access control relies on
 # the transport layer (stdio). Do not expose this server over network without auth proxy.
-@server.call_tool()
 async def call_tool(name: str, arguments: dict):
 
     # ── search_vault ──────────────────────────────────────────────────────────
@@ -2066,6 +2067,26 @@ async def call_tool(name: str, arguments: dict):
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
+# mcp 2.0.0 replaced decorator-based handler registration (@server.list_tools(),
+# @server.call_tool()) with constructor callbacks taking (ctx, params). These
+# adapters keep list_tools/call_tool's simpler list[Tool]/list[TextContent]
+# signatures unchanged and just translate at the boundary.
+async def _on_list_tools(ctx, params):
+    return ListToolsResult(tools=await list_tools())
+
+
+async def _on_call_tool(ctx, params):
+    content = await call_tool(params.name, params.arguments or {})
+    return CallToolResult(content=content)
+
+
+server = Server(
+    "obsidian-semantic",
+    on_list_tools=_on_list_tools,
+    on_call_tool=_on_call_tool,
+)
+
+
 # ──────────────────────────────── Entry Point ────────────────────────────────
 
 async def main():
@@ -2133,7 +2154,10 @@ async def main():
                 if not line_str:
                     continue
                 try:
-                    message = JSONRPCMessage.model_validate_json(line_str)
+                    # mcp 2.0.0 made JSONRPCMessage a bare Union type alias (no
+                    # .model_validate_json()); jsonrpc_message_adapter is the
+                    # TypeAdapter mcp's own stdio transport uses to parse it.
+                    message = jsonrpc_message_adapter.validate_json(line_str, by_name=False)
                     await read_writer.send(SessionMessage(message))
                 except Exception as exc:
                     await read_writer.send(exc)
