@@ -191,6 +191,42 @@ def _running_dashboard(monkeypatch, token: str = TEST_TOKEN):
         thread.join(timeout=5)
 
 
+def test_slow_request_does_not_block_a_second_dashboard_request(monkeypatch):
+    """The dashboard must serve health/UI traffic while another client is slow."""
+    monkeypatch.setattr(dashboard, "DASHBOARD_TOKEN", TEST_TOKEN)
+    started = threading.Event()
+    release = threading.Event()
+
+    class SlowClientHandler(dashboard.DashboardHandler):
+        def do_GET(self):
+            if self.path == "/slow-client":
+                started.set()
+                assert release.wait(timeout=5)
+                self.send_response(200)
+                self.end_headers()
+                return
+            super().do_GET()
+
+    httpd = dashboard.DashboardServer(("127.0.0.1", 0), SlowClientHandler)
+    server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    server_thread.start()
+    base_url = f"http://127.0.0.1:{httpd.server_port}"
+    slow_client = threading.Thread(
+        target=requests.get, args=(f"{base_url}/slow-client",), kwargs={"timeout": 6}, daemon=True
+    )
+    slow_client.start()
+    try:
+        assert started.wait(timeout=1), "slow request never reached the server"
+        response = requests.get(f"{base_url}/", timeout=1)
+        assert response.status_code == 200
+    finally:
+        release.set()
+        slow_client.join(timeout=5)
+        httpd.shutdown()
+        httpd.server_close()
+        server_thread.join(timeout=5)
+
+
 def test_post_reindex_without_token_returns_401(monkeypatch):
     with _running_dashboard(monkeypatch) as base_url:
         r = requests.post(f"{base_url}/api/reindex")

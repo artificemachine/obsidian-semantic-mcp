@@ -996,8 +996,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class DashboardServer(http.server.ThreadingHTTPServer):
+    """Serve independent dashboard clients without one slow request blocking all."""
+
+    daemon_threads = True
+
+
 if __name__ == "__main__":
-    server = http.server.HTTPServer((DASHBOARD_BIND, DASH_PORT), DashboardHandler)
+    server = DashboardServer((DASHBOARD_BIND, DASH_PORT), DashboardHandler)
     print(f"Dashboard running at http://{DASHBOARD_BIND}:{DASH_PORT}")
     print(f"Vault: {VAULT_PATH or '(not set)'}")
     print(f"Database: {_redact_dsn(DATABASE_URL)}")
