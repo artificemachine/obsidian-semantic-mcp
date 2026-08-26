@@ -620,7 +620,7 @@ wheels = [
 
 [[package]]
 name = "obsidian-semantic-mcp"
-version = "0.16.5"
+version = "0.16.6"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
