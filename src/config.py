@@ -145,6 +145,9 @@ class CaasiopeiaSettings:
     # vault basename -> Caasiopeia source UUID. One source per vault root.
     source_ids: dict[str, str]
     token_budget: int
+    # vault basename -> vault-relative subfolder the source was synced from.
+    # Absent means the source was synced from the vault root.
+    source_roots: dict[str, str] = field(default_factory=dict)
 
 
 def resolve_retrieval_backend(env: Mapping[str, str] | None = None) -> str:
@@ -195,6 +198,38 @@ def _parse_source_map(raw: str, vault_paths: Sequence[str]) -> dict[str, str]:
     return mapping
 
 
+def _parse_source_roots(raw: str, mapped_vaults: Sequence[str]) -> dict[str, str]:
+    """Parse ``CAASIOPEIA_SOURCE_ROOTS`` (``vault=relative/subfolder,...``).
+
+    Caasiopeia's ``external_id`` is relative to the directory a source was
+    synced from. When that is a vault subfolder, graph seeds must be resolved
+    under it, so the subfolder has to be stated. It is a plain relative path:
+    no absolute form, drive letter, backslash, NUL or ``.``/``..`` segment.
+    """
+    variable = "CAASIOPEIA_SOURCE_ROOTS"
+    roots: dict[str, str] = {}
+    for entry in (part.strip() for part in raw.split(",") if part.strip()):
+        name, sep, subdir = entry.partition("=")
+        name, subdir = name.strip(), subdir.strip()
+        if not sep or not name or not subdir:
+            raise ConfigError(f"{variable} entries must look like vault=relative/subfolder")
+        if name not in mapped_vaults:
+            raise ConfigError(f"{variable} names a vault that has no source mapping")
+        if name in roots:
+            raise ConfigError(f"{variable} sets a vault more than once")
+        trimmed = subdir.removesuffix("/")
+        if (
+            "\x00" in trimmed
+            or "\\" in trimmed
+            or trimmed.startswith("/")
+            or re.match(r"^[A-Za-z]:", trimmed)
+            or any(segment in ("", ".", "..") for segment in trimmed.split("/"))
+        ):
+            raise ConfigError(f"{variable} must use plain relative subfolders")
+        roots[name] = trimmed
+    return roots
+
+
 def load_caasiopeia_settings(
     vault_paths: Sequence[str], env: Mapping[str, str] | None = None
 ) -> CaasiopeiaSettings:
@@ -232,9 +267,13 @@ def load_caasiopeia_settings(
         raise ConfigError(
             f"CAASIOPEIA_TOKEN_BUDGET must be an integer from 1 to {MAX_CAASIOPEIA_TOKEN_BUDGET}"
         )
+    source_ids = _parse_source_map(raw_map, vault_paths)
     return CaasiopeiaSettings(
         base_url=base_url.rstrip("/"),
         api_key=api_key,
-        source_ids=_parse_source_map(raw_map, vault_paths),
+        source_ids=source_ids,
         token_budget=budget,
+        source_roots=_parse_source_roots(
+            env.get("CAASIOPEIA_SOURCE_ROOTS", "").strip(), list(source_ids)
+        ),
     )

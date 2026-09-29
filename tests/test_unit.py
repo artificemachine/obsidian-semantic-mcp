@@ -1718,6 +1718,48 @@ def _caas_env(**overrides):
 
 
 class TestCaasiopeiaConfig:
+    def test_source_roots_default_to_empty_and_parse_per_vault_subdirectories(self):
+        import config
+
+        vaults = ["/v/main"]
+        assert config.load_caasiopeia_settings(vaults, _caas_env()).source_roots == {}
+        settings = config.load_caasiopeia_settings(
+            vaults, _caas_env(CAASIOPEIA_SOURCE_ROOTS="main=notes/")
+        )
+        assert settings.source_roots == {"main": "notes"}
+        nested = config.load_caasiopeia_settings(
+            vaults, _caas_env(CAASIOPEIA_SOURCE_ROOTS="main=a/b")
+        )
+        assert nested.source_roots == {"main": "a/b"}
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "main",
+            "main=",
+            "=notes",
+            "other=notes",
+            "main=/notes",
+            "main=../notes",
+            "main=notes/../x",
+            "main=./notes",
+            "main=notes\\sub",
+            "main=no\x00tes",
+            "main=notes,main=other",
+            "main=C:notes",
+        ],
+    )
+    def test_source_roots_reject_unsafe_or_unmapped_entries_without_echoing_values(self, raw):
+        import config
+
+        with pytest.raises(config.ConfigError) as info:
+            config.load_caasiopeia_settings(
+                ["/v/main"], _caas_env(CAASIOPEIA_SOURCE_ROOTS=raw)
+            )
+        message = str(info.value)
+        assert "CAASIOPEIA_SOURCE_ROOTS" in message
+        assert "notes" not in message and "other" not in message
+
     def test_backend_defaults_to_local_and_rejects_unknown_values(self):
         import config
 

@@ -1574,10 +1574,15 @@ def _resolve_caas_seed_path(passage) -> str | None:
     if any(segment in ("", ".", "..") for segment in segments):
         return None
     root = Path(roots[0])
-    candidate = root.joinpath(*segments)
+    # external_id is relative to the directory the source was synced from,
+    # which may be a vault subfolder (CAASIOPEIA_SOURCE_ROOTS).
+    sync_root = root.joinpath(*_CAAS_SETTINGS.source_roots.get(name, "").split("/"))
+    candidate = sync_root.joinpath(*segments)
     try:
         resolved = candidate.resolve(strict=True)
-        inside = resolved.is_relative_to(root.resolve())
+        inside = resolved.is_relative_to(root.resolve()) and resolved.is_relative_to(
+            sync_root.resolve()
+        )
     except (OSError, RuntimeError, ValueError):
         return None
     if not inside or not resolved.is_file():
