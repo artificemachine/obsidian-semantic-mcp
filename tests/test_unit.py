@@ -1697,3 +1697,165 @@ class TestIndexVaultPerf:
             f"embed/DB mocked out — expected well under 10s for file-walk + "
             f"hash + link-index overhead alone"
         )
+
+
+# ── Caasiopeia retrieval backend configuration ───────────────────────────────
+
+_CAAS_SOURCE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_CAAS_SOURCE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+_CAAS_SECRET = "synthetic-secret-never-echoed"
+
+
+def _caas_env(**overrides):
+    env = {
+        "OSM_RETRIEVAL_BACKEND": "caasiopeia",
+        "CAASIOPEIA_BASE_URL": "http://caas.invalid:8080",
+        "CAASIOPEIA_API_KEY": _CAAS_SECRET,
+        "CAASIOPEIA_SOURCE_MAP": f"main={_CAAS_SOURCE_A}",
+    }
+    env.update(overrides)
+    return {k: v for k, v in env.items() if v is not None}
+
+
+class TestCaasiopeiaConfig:
+    def test_backend_defaults_to_local_and_rejects_unknown_values(self):
+        import config
+
+        assert config.resolve_retrieval_backend({}) == "local"
+        assert config.resolve_retrieval_backend({"OSM_RETRIEVAL_BACKEND": "local"}) == "local"
+        assert config.resolve_retrieval_backend(
+            {"OSM_RETRIEVAL_BACKEND": "caasiopeia"}
+        ) == "caasiopeia"
+        with pytest.raises(config.ConfigError, match="OSM_RETRIEVAL_BACKEND"):
+            config.resolve_retrieval_backend({"OSM_RETRIEVAL_BACKEND": "elastic"})
+
+    def test_caasiopeia_config_requires_base_url_and_source_mapping_when_backend_is_caas(self):
+        import config
+
+        vaults = ["/v/main"]
+        for missing, variable in (
+            ("CAASIOPEIA_BASE_URL", "CAASIOPEIA_BASE_URL"),
+            ("CAASIOPEIA_API_KEY", "CAASIOPEIA_API_KEY"),
+            ("CAASIOPEIA_SOURCE_MAP", "CAASIOPEIA_SOURCE_MAP"),
+        ):
+            with pytest.raises(config.ConfigError) as info:
+                config.load_caasiopeia_settings(vaults, _caas_env(**{missing: None}))
+            assert variable in str(info.value)
+            assert _CAAS_SECRET not in str(info.value)
+
+    def test_valid_caasiopeia_config_is_parsed_and_hides_the_api_key(self):
+        import config
+
+        settings = config.load_caasiopeia_settings(
+            ["/v/main"], _caas_env(CAASIOPEIA_TOKEN_BUDGET="900")
+        )
+
+        assert settings.base_url == "http://caas.invalid:8080"
+        assert settings.source_ids == {"main": _CAAS_SOURCE_A}
+        assert settings.token_budget == 900
+        assert settings.api_key == _CAAS_SECRET
+        assert _CAAS_SECRET not in repr(settings)
+
+    def test_token_budget_defaults_and_is_bounded(self):
+        import config
+
+        default = config.load_caasiopeia_settings(["/v/main"], _caas_env())
+        assert default.token_budget == config.DEFAULT_CAASIOPEIA_TOKEN_BUDGET
+        for bad in ("0", "-5", "abc", "999999999"):
+            with pytest.raises(config.ConfigError, match="CAASIOPEIA_TOKEN_BUDGET"):
+                config.load_caasiopeia_settings(
+                    ["/v/main"], _caas_env(CAASIOPEIA_TOKEN_BUDGET=bad)
+                )
+
+    @pytest.mark.parametrize(
+        "source_map",
+        [
+            "main",                                         # no separator
+            "main=not-a-uuid",                              # bad source id
+            f"other={_CAAS_SOURCE_A}",                      # names an unconfigured vault
+            f"main={_CAAS_SOURCE_A},main={_CAAS_SOURCE_B}", # duplicate vault
+            f"main={_CAAS_SOURCE_A},side={_CAAS_SOURCE_A}", # duplicate source id
+            f"main={_CAAS_SOURCE_A}",                       # leaves vault "side" unmapped
+        ],
+    )
+    def test_invalid_source_map_is_a_hard_error_naming_only_the_variable(self, source_map):
+        import config
+
+        with pytest.raises(config.ConfigError) as info:
+            config.load_caasiopeia_settings(
+                ["/v/main", "/v/side"], _caas_env(CAASIOPEIA_SOURCE_MAP=source_map)
+            )
+
+        assert "CAASIOPEIA_SOURCE_MAP" in str(info.value)
+        assert _CAAS_SOURCE_A not in str(info.value)
+
+    def test_ambiguous_vault_names_cannot_be_mapped(self):
+        import config
+
+        with pytest.raises(config.ConfigError, match="CAASIOPEIA_SOURCE_MAP"):
+            config.load_caasiopeia_settings(
+                ["/a/main", "/b/main"], _caas_env()
+            )
+
+    @pytest.mark.parametrize(
+        "base_url", ["caas.invalid", "ftp://caas.invalid", "http://u:p@caas.invalid"]
+    )
+    def test_invalid_base_url_is_rejected(self, base_url):
+        import config
+
+        with pytest.raises(config.ConfigError, match="CAASIOPEIA_BASE_URL"):
+            config.load_caasiopeia_settings(
+                ["/v/main"], _caas_env(CAASIOPEIA_BASE_URL=base_url)
+            )
+
+
+class TestRetrievalBackendWiring:
+    def test_local_backend_builds_no_client_and_keeps_local_search(self, monkeypatch):
+        import server
+
+        monkeypatch.setattr(server, "RETRIEVAL_BACKEND", "caasiopeia")
+        monkeypatch.setattr(server, "_CAAS_SETTINGS", object())
+        server._init_retrieval_backend({"OSM_RETRIEVAL_BACKEND": "local"}, ["/v/main"])
+
+        assert server.RETRIEVAL_BACKEND == "local"
+        assert server._CAAS_SETTINGS is None
+        assert server._get_caas_client() is None
+
+    def test_caasiopeia_backend_builds_one_client_lazily(self, monkeypatch):
+        import server
+
+        built = []
+
+        class RecordingClient:
+            def __init__(self, base_url, api_key, **kwargs):
+                built.append((base_url, api_key))
+
+        monkeypatch.setattr(server, "CaasClient", RecordingClient)
+        server._init_retrieval_backend(_caas_env(), ["/v/main"])
+        try:
+            assert server.RETRIEVAL_BACKEND == "caasiopeia"
+            assert built == [], "no client is built until the first search"
+            first = server._get_caas_client()
+            assert server._get_caas_client() is first
+            assert built == [("http://caas.invalid:8080", _CAAS_SECRET)]
+        finally:
+            server._init_retrieval_backend({}, ["/v/main"])
+
+    def test_invalid_caasiopeia_config_fails_startup_init_before_any_request(self, monkeypatch):
+        import config
+        import server
+
+        def no_network(*args, **kwargs):
+            raise AssertionError("no HTTP request may happen during configuration")
+
+        monkeypatch.setattr(requests_module(), "post", no_network)
+        with pytest.raises(config.ConfigError, match="CAASIOPEIA_BASE_URL"):
+            server._init_retrieval_backend(
+                _caas_env(CAASIOPEIA_BASE_URL=None), ["/v/main"]
+            )
+
+
+def requests_module():
+    import requests
+
+    return requests
