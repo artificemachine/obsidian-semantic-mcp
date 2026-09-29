@@ -79,10 +79,26 @@ for _env_path in _ENV_SEARCH_PATHS:
 
 try:
     from . import migrations
-    from .config import build_dsn, REQUIRED_FRONTMATTER_DEFAULTS, REINDEX_LOCK_KEY  # installed as a package (uv tool / pip install)
+    from .config import (  # installed as a package (uv tool / pip install)
+        build_dsn, REQUIRED_FRONTMATTER_DEFAULTS, REINDEX_LOCK_KEY,
+        RETRIEVAL_BACKEND_CAASIOPEIA, RETRIEVAL_BACKEND_LOCAL, ConfigError,
+        load_caasiopeia_settings, resolve_retrieval_backend,
+    )
+    from .caasiopeia_client import (
+        CaasClient, CaasError, CaasInvalidResponse, CaasRejected, CaasRequestError,
+        CaasTimeout, CaasUnauthorized, CaasUnavailable,
+    )
 except ImportError:
     import migrations
-    from config import build_dsn, REQUIRED_FRONTMATTER_DEFAULTS, REINDEX_LOCK_KEY  # fallback: run directly from src/ during dev
+    from config import (  # fallback: run directly from src/ during dev
+        build_dsn, REQUIRED_FRONTMATTER_DEFAULTS, REINDEX_LOCK_KEY,
+        RETRIEVAL_BACKEND_CAASIOPEIA, RETRIEVAL_BACKEND_LOCAL, ConfigError,
+        load_caasiopeia_settings, resolve_retrieval_backend,
+    )
+    from caasiopeia_client import (
+        CaasClient, CaasError, CaasInvalidResponse, CaasRejected, CaasRequestError,
+        CaasTimeout, CaasUnauthorized, CaasUnavailable,
+    )
 
 
 # ─────────────────────────────────── Config ─────────────────────────────────
@@ -117,6 +133,48 @@ VAULT_WATCH_POLLING = os.environ.get("VAULT_WATCH_POLLING", "auto").lower()
 VAULT_POLL_INTERVAL = int(os.environ.get("VAULT_POLL_INTERVAL", "10"))  # seconds between polls
 
 DATABASE_URL = build_dsn()
+
+# ── Retrieval backend ────────────────────────────────────────────────────────
+# "local" (default) ranks with the pgvector notes table. "caasiopeia" is an
+# explicit opt-in that delegates ranking to Caasiopeia over HTTP and never
+# falls back to local ranking. Set once at startup by _init_retrieval_backend().
+RETRIEVAL_BACKEND: str = RETRIEVAL_BACKEND_LOCAL
+_CAAS_SETTINGS = None
+_CAAS_CLIENT = None
+_CAAS_CLIENT_LOCK = threading.Lock()
+
+
+def _init_retrieval_backend(env=None, vault_paths=None) -> None:
+    """Select the retrieval backend and validate its configuration.
+
+    Raises ConfigError (variable names only, never values) before any request
+    is made. ``env`` and ``vault_paths`` default to the process environment and
+    the configured vaults; tests pass their own.
+    """
+    global RETRIEVAL_BACKEND, _CAAS_SETTINGS, _CAAS_CLIENT
+    backend = resolve_retrieval_backend(env)
+    settings = None
+    if backend == RETRIEVAL_BACKEND_CAASIOPEIA:
+        settings = load_caasiopeia_settings(
+            VAULT_PATHS if vault_paths is None else vault_paths, env
+        )
+    with _CAAS_CLIENT_LOCK:
+        RETRIEVAL_BACKEND = backend
+        _CAAS_SETTINGS = settings
+        _CAAS_CLIENT = None
+
+
+def _get_caas_client():
+    """Return the shared Caasiopeia client, built on first use; None when the
+    caasiopeia backend is not selected."""
+    global _CAAS_CLIENT
+    with _CAAS_CLIENT_LOCK:
+        if _CAAS_SETTINGS is None:
+            return None
+        if _CAAS_CLIENT is None:
+            _CAAS_CLIENT = CaasClient(_CAAS_SETTINGS.base_url, _CAAS_SETTINGS.api_key)
+        return _CAAS_CLIENT
+
 
 MAX_EMBED_CHARS = 2000  # nomic-embed-text context limit (approx 512 tokens)
 _TIMESTAMP_FMT  = "%Y-%m-%d %H:%M"
@@ -1421,6 +1479,208 @@ def _relative(abspath: Path) -> str:
     return str(abspath)
 
 
+def _render_neighbor_parts(neighbors: list[tuple[str, str, str]]) -> list[str]:
+    """Format expand_via_links() results; shared by both retrieval backends so
+    the neighbor output shape cannot drift between them."""
+    parts = ["\n**Wikilink neighbors** _(connected notes not in top results)_\n"]
+    for npath, ncontent, via in neighbors:
+        nrel = _relative(Path(npath))
+        via_rel = _relative(Path(via))
+        npreview = ncontent[:300].strip()
+        while "\n\n\n" in npreview:
+            npreview = npreview.replace("\n\n\n", "\n\n")
+        parts.append(f"**{nrel}** _(linked via {via_rel})_\n\n{npreview}\n")
+    return parts
+
+
+# ──────────────────────── Caasiopeia-backed search_vault ─────────────────────
+
+# OSM search mode -> Caasiopeia retrieval mode.
+_CAAS_MODES = {"hybrid": "hybrid", "semantic": "dense", "keyword": "lexical"}
+
+# Client error type -> what to tell the user. Order matters: first match wins.
+_CAAS_FAILURE_REASONS = (
+    (CaasRequestError, "the search request was invalid"),
+    (CaasUnauthorized, "Caasiopeia rejected the credential; check CAASIOPEIA_API_KEY"),
+    (CaasTimeout, "Caasiopeia timed out; try again"),
+    (CaasUnavailable, "Caasiopeia is unavailable; try again later"),
+    (CaasInvalidResponse, "Caasiopeia returned an invalid response"),
+    (CaasRejected, "Caasiopeia rejected the request"),
+)
+
+
+def _caas_failure_text(exc: CaasError) -> str:
+    reason = next(text for kind, text in _CAAS_FAILURE_REASONS if isinstance(exc, kind))
+    status = f" (HTTP {exc.status})" if exc.status else ""
+    trace = f" [trace {exc.trace_id}]" if exc.trace_id else ""
+    return f"Search error: {reason}{status}{trace}. Local ranking was not used."
+
+
+def _caas_source_scope(vault_ids: list[str] | None) -> list[str] | None:
+    """Caasiopeia source ids for the requested vaults; None if one is unmapped."""
+    source_ids = _CAAS_SETTINGS.source_ids
+    if not vault_ids:
+        return list(source_ids.values())
+    names = [os.path.basename(v.rstrip("/\\")) for v in vault_ids]
+    if any(name not in source_ids for name in names):
+        return None
+    return [source_ids[name] for name in names]
+
+
+def _render_caas_passages(passages) -> list[str]:
+    """Format Caasiopeia passages; the vault name prefixes the path when
+    several vaults are configured, mirroring _relative()."""
+    vault_by_source = {sid: name for name, sid in _CAAS_SETTINGS.source_ids.items()}
+    several = len(vault_by_source) > 1
+    parts = []
+    for passage in passages:
+        label = passage.external_id
+        if several and passage.source_id in vault_by_source:
+            label = f"{vault_by_source[passage.source_id]}/{label}"
+        header = f"**{label}** _(score: {passage.score:.2f})_"
+        if passage.heading_path:
+            header += f"\n_{' > '.join(passage.heading_path)}_"
+        text = passage.text.strip()
+        while "\n\n\n" in text:
+            text = text.replace("\n\n\n", "\n\n")
+        parts.append(f"{header}\n\n{text}\n")
+    return parts
+
+
+def _resolve_caas_seed_path(passage) -> str | None:
+    """Map a Caasiopeia passage to the local note path that graph expansion
+    may use, or None when it cannot be verified.
+
+    Identity rule (documented in README): each Caasiopeia source holds exactly
+    one vault, and a passage's ``external_id`` is that vault's root-relative,
+    forward-slash path. Anything else, or a path that does not resolve to an
+    existing file inside that vault root, is never trusted.
+    """
+    vault_by_source = {sid: name for name, sid in _CAAS_SETTINGS.source_ids.items()}
+    name = vault_by_source.get(passage.source_id)
+    roots = [v for v in VAULT_PATHS if os.path.basename(v.rstrip("/\\")) == name]
+    if name is None or len(roots) != 1:
+        return None
+    external_id = passage.external_id
+    if (
+        not external_id
+        or "\x00" in external_id
+        or "\\" in external_id
+        or external_id.startswith("/")
+        or re.match(r"^[A-Za-z]:", external_id)
+    ):
+        return None
+    segments = external_id.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        return None
+    root = Path(roots[0])
+    candidate = root.joinpath(*segments)
+    try:
+        resolved = candidate.resolve(strict=True)
+        inside = resolved.is_relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not inside or not resolved.is_file():
+        return None
+    # The unresolved form matches what index_vault stored in notes.path.
+    return str(candidate)
+
+
+async def _caas_graph_parts(passages, trace_id: str) -> list[str]:
+    """Wikilink-neighbor output for verified Caasiopeia passages only."""
+    seeds: list[str] = []
+    skipped = 0
+    for passage in passages:
+        seed = _resolve_caas_seed_path(passage)
+        if seed is None:
+            skipped += 1
+        elif seed not in seeds:
+            seeds.append(seed)
+    if skipped:
+        log.info("graph_expand skipped %d unverified passage(s) trace=%s", skipped, trace_id)
+    if not seeds:
+        return []
+    try:
+        neighbors = await asyncio.get_running_loop().run_in_executor(
+            None, expand_via_links, seeds, 1
+        )
+    except Exception as exc:
+        log.error("graph_expand failed trace=%s failure=%s", trace_id, type(exc).__name__)
+        return ["\n_Wikilink expansion unavailable (local link index error)._\n"]
+    if not neighbors:
+        return []
+    log.info("graph_expand added %d neighbor(s)", len(neighbors))
+    return _render_neighbor_parts(neighbors)
+
+
+async def _search_vault_caasiopeia(query, limit, min_similarity, mode, vault_ids, graph_expand):
+    """search_vault when the caasiopeia backend is selected.
+
+    Never falls back to local ranking: a failure is reported as a failure, so
+    two retrieval policies are never mixed in one answer.
+    """
+    try:
+        client = _get_caas_client()
+    except ValueError:
+        client = None  # the constructor rejected the configuration
+    if client is None:
+        return [TextContent(type="text", text=(
+            "Search error: the caasiopeia backend is selected but not configured. "
+            "Local ranking was not used."
+        ))]
+    source_ids = _caas_source_scope(vault_ids)
+    if source_ids is None:
+        return [TextContent(type="text", text=(
+            "Search error: a requested vault has no Caasiopeia source "
+            "(see CAASIOPEIA_SOURCE_MAP). Local ranking was not used."
+        ))]
+
+    started = time.monotonic()
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: client.search(
+                query,
+                token_budget=_CAAS_SETTINGS.token_budget,
+                source_ids=source_ids,
+                mode=_CAAS_MODES[mode],
+            ),
+        )
+    except CaasError as exc:
+        log.warning("search_vault caasiopeia failure=%s trace=%s status=%s",
+                    type(exc).__name__, exc.trace_id, exc.status)
+        return [TextContent(type="text", text=_caas_failure_text(exc))]
+    except Exception as exc:
+        # Type name only: an unexpected exception's text could carry a secret.
+        log.error("search_vault caasiopeia unexpected failure=%s", type(exc).__name__)
+        return [TextContent(type="text", text=(
+            "Search error: Caasiopeia search failed unexpectedly (see server log). "
+            "Local ranking was not used."
+        ))]
+
+    shown = [p for p in result.passages if p.score >= min_similarity][:limit]
+    log.info(
+        "search backend=caasiopeia mode=%s query_hash=%s limit=%d found=%d "
+        "degraded=%s trace=%s duration_ms=%d",
+        mode, hashlib.sha256(query.encode()).hexdigest()[:8], limit, len(shown),
+        result.degraded, result.trace_id, int((time.monotonic() - started) * 1000),
+    )
+    if not shown:
+        if result.passages:
+            text = f"No Caasiopeia results met min_similarity={min_similarity}."
+        else:
+            text = "No results from Caasiopeia for this query."
+        return [TextContent(type="text", text=text)]
+
+    parts = _render_caas_passages(shown)
+    if graph_expand:
+        parts.extend(await _caas_graph_parts(shown, result.trace_id))
+    if result.degraded:
+        parts.append(f"_Caasiopeia answered in degraded mode ({result.degradation_reason})._")
+    return [TextContent(type="text", text="\n---\n".join(parts))]
+
+
 # ───────────────────────────────── MCP Server ────────────────────────────────
 
 async def list_tools():
@@ -1669,6 +1929,13 @@ async def call_tool(name: str, arguments: dict):
                          f"Available: {', '.join(os.path.basename(v) for v in VAULT_PATHS)}",
                 )]
 
+        if RETRIEVAL_BACKEND == RETRIEVAL_BACKEND_CAASIOPEIA:
+            # Not cached locally: Caasiopeia has its own cache, and a stale local
+            # copy could outlive an outage the caller should see.
+            return await _search_vault_caasiopeia(
+                query, limit, min_similarity, mode, vault_ids, graph_expand
+            )
+
         # Check LRU cache before hitting Ollama + DB
         cache_key = hashlib.sha256(
             f"{query}:{limit}:{min_similarity}:{mode}:{RERANK_MODEL}:{vault_filter}:{graph_expand}".encode()
@@ -1770,16 +2037,7 @@ async def call_tool(name: str, arguments: dict):
                     None, expand_via_links, result_paths, 1
                 )
                 if neighbors:
-                    parts.append("\n**Wikilink neighbors** _(connected notes not in top results)_\n")
-                    for npath, ncontent, via in neighbors:
-                        nrel = _relative(Path(npath))
-                        via_rel = _relative(Path(via))
-                        npreview = ncontent[:300].strip()
-                        while "\n\n\n" in npreview:
-                            npreview = npreview.replace("\n\n\n", "\n\n")
-                        parts.append(
-                            f"**{nrel}** _(linked via {via_rel})_\n\n{npreview}\n"
-                        )
+                    parts.extend(_render_neighbor_parts(neighbors))
                     log.info("graph_expand added %d neighbor(s)", len(neighbors))
 
             result = [TextContent(type="text", text="\n---\n".join(parts))]
@@ -2095,6 +2353,13 @@ async def main():
         sys.exit(1)
 
     log.info("Vaults: %s", ", ".join(VAULT_PATHS))
+
+    try:
+        _init_retrieval_backend()
+    except ConfigError as exc:
+        log.error("Invalid retrieval configuration: %s", exc)
+        sys.exit(1)
+    log.info("Retrieval backend: %s", RETRIEVAL_BACKEND)
 
     import time as _time
     global _STARTED_AT

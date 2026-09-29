@@ -459,6 +459,28 @@ When using multiple vaults, the `search_vault` MCP tool gains a `vault` paramete
 | `DASHBOARD_TOKEN` | Bearer token for the dashboard's mutating endpoints. Generated and stored at `~/.config/obsidian-semantic-mcp/dashboard_token` (mode `0600`) if unset. | *auto-generated* |
 | `OSM_SKIP_PI` | Set to `1` to skip configuring the optional `pi` MCP client during `osm init`, even if the `pi` binary is installed. Useful for a clean setup matching what most users (no `pi`) see. | — |
 
+## Caasiopeia Retrieval Backend (opt-in)
+
+By default `search_vault` ranks notes locally (pgvector + Ollama). Setting `OSM_RETRIEVAL_BACKEND=caasiopeia` delegates ranking to a Caasiopeia service over HTTP (`POST /v1/context`). Reading, writing, watching and wikilink expansion stay in OSM.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `OSM_RETRIEVAL_BACKEND` | `local` or `caasiopeia`. Any other value stops startup. | `local` |
+| `CAASIOPEIA_BASE_URL` | `http(s)://host[:port]` of the service, without credentials. Required in `caasiopeia` mode. | — |
+| `CAASIOPEIA_API_KEY` | Bearer token, read from the environment only and never written to disk or logs. Required in `caasiopeia` mode. | — |
+| `CAASIOPEIA_SOURCE_MAP` | `vault=source-uuid,...`: one Caasiopeia source per vault, keyed by the vault directory name (in the Docker install, the mount point: `vault` by default). Every configured vault must be mapped, each source used once. Required in `caasiopeia` mode. | — |
+| `CAASIOPEIA_TOKEN_BUDGET` | Token budget per retrieval request (1 to 100000). The public `limit` and `min_similarity` then trim what is shown. | `2000` |
+
+Rules of the opt-in mode:
+
+- **Startup validation.** A missing or invalid variable stops the server at startup, naming the variable but never its value.
+- **No fallback.** If Caasiopeia is unreachable, times out, rejects the credential or returns an invalid response, `search_vault` says so (with a trace id) and does not return locally ranked notes.
+- **Mode mapping.** `hybrid` maps to `hybrid`, `semantic` to `dense`, `keyword` to `lexical`.
+- **Source identity.** `graph_expand` follows wikilinks only from passages whose `external_id` is the vault-root-relative, forward-slash path of an existing note inside the vault mapped to the passage's source. Any other `external_id` (absolute, `..`, unmapped source, missing file, symlink out of the vault) is ignored for expansion. Wikilink expansion still reads the local `notes` and `note_links` tables, so the local index must keep running. The `external_id` format is what Caasiopeia's sync documents for a root-relative source; verify it against a real response before relying on graph expansion.
+- **Rollback.** Unset the variables or set `OSM_RETRIEVAL_BACKEND=local` and restart the MCP server. Nothing in Caasiopeia is modified.
+
+`local` remains the default; making `caasiopeia` the default is a separate decision that needs a validated Caasiopeia corpus for the vault.
+
 ## Monitoring Dashboard
 
 A built-in dashboard is available at http://localhost:8484 (started automatically with Docker). It shows:

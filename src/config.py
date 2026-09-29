@@ -7,7 +7,11 @@ and cannot silently diverge.
 import os
 import re
 import secrets
+import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Mandatory frontmatter keys every note written via write_file must carry.
 # `None` means "no default value" -- the key still gets added, just empty
@@ -118,3 +122,119 @@ def resolve_dashboard_token() -> str:
     except OSError:
         pass  # can't persist — still return a usable in-memory token this run
     return token
+
+
+# ─────────────────────────── Retrieval backend selection ─────────────────────
+
+RETRIEVAL_BACKEND_LOCAL = "local"
+RETRIEVAL_BACKEND_CAASIOPEIA = "caasiopeia"
+RETRIEVAL_BACKENDS = (RETRIEVAL_BACKEND_LOCAL, RETRIEVAL_BACKEND_CAASIOPEIA)
+DEFAULT_CAASIOPEIA_TOKEN_BUDGET = 2000
+MAX_CAASIOPEIA_TOKEN_BUDGET = 100_000
+
+
+class ConfigError(RuntimeError):
+    """Invalid configuration. Messages name environment variables only,
+    never their values, so a copied log line cannot leak a credential."""
+
+
+@dataclass(frozen=True)
+class CaasiopeiaSettings:
+    base_url: str
+    api_key: str = field(repr=False)
+    # vault basename -> Caasiopeia source UUID. One source per vault root.
+    source_ids: dict[str, str]
+    token_budget: int
+
+
+def resolve_retrieval_backend(env: Mapping[str, str] | None = None) -> str:
+    """Return the selected retrieval backend; ``local`` unless opted out of it."""
+    env = os.environ if env is None else env
+    backend = env.get("OSM_RETRIEVAL_BACKEND", "").strip().lower() or RETRIEVAL_BACKEND_LOCAL
+    if backend not in RETRIEVAL_BACKENDS:
+        raise ConfigError(
+            f"OSM_RETRIEVAL_BACKEND must be one of: {', '.join(RETRIEVAL_BACKENDS)}"
+        )
+    return backend
+
+
+def _parse_source_map(raw: str, vault_paths: Sequence[str]) -> dict[str, str]:
+    """Parse ``CAASIOPEIA_SOURCE_MAP`` (``vault=source-uuid,...``).
+
+    Every configured vault must be mapped to exactly one distinct source, and
+    every entry must name a configured vault. An unmapped vault would make an
+    unfiltered search silently skip it, so that is an error rather than a gap.
+    """
+    variable = "CAASIOPEIA_SOURCE_MAP"
+    names = [os.path.basename(v.rstrip("/\\")) for v in vault_paths]
+    if len(set(names)) != len(names):
+        raise ConfigError(
+            f"{variable} cannot address vaults that share a directory name; "
+            "rename one vault directory"
+        )
+    mapping: dict[str, str] = {}
+    for entry in (part.strip() for part in raw.split(",") if part.strip()):
+        name, sep, source = entry.partition("=")
+        name, source = name.strip(), source.strip()
+        if not sep or not name or not source:
+            raise ConfigError(f"{variable} entries must look like vault=source-uuid")
+        try:
+            source = str(uuid.UUID(source))
+        except ValueError:
+            raise ConfigError(f"{variable} contains a source id that is not a UUID") from None
+        if name not in names:
+            raise ConfigError(f"{variable} names a vault that is not configured")
+        if name in mapping:
+            raise ConfigError(f"{variable} maps a vault more than once")
+        if source in mapping.values():
+            raise ConfigError(f"{variable} maps one source id to more than one vault")
+        mapping[name] = source
+    missing = [n for n in names if n not in mapping]
+    if not mapping or missing:
+        raise ConfigError(f"{variable} must map every configured vault to a source id")
+    return mapping
+
+
+def load_caasiopeia_settings(
+    vault_paths: Sequence[str], env: Mapping[str, str] | None = None
+) -> CaasiopeiaSettings:
+    """Validate and load the Caasiopeia opt-in configuration.
+
+    Called only when the caasiopeia backend is selected. The API key is read
+    from the environment and held in memory; it is never written anywhere.
+    """
+    env = os.environ if env is None else env
+    base_url = env.get("CAASIOPEIA_BASE_URL", "").strip()
+    if not base_url:
+        raise ConfigError("CAASIOPEIA_BASE_URL is required when OSM_RETRIEVAL_BACKEND=caasiopeia")
+    parts = urlsplit(base_url)
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+    ):
+        raise ConfigError("CAASIOPEIA_BASE_URL must be http(s)://host[:port] without credentials")
+    api_key = env.get("CAASIOPEIA_API_KEY", "").strip()
+    if not api_key:
+        raise ConfigError("CAASIOPEIA_API_KEY is required when OSM_RETRIEVAL_BACKEND=caasiopeia")
+    raw_map = env.get("CAASIOPEIA_SOURCE_MAP", "").strip()
+    if not raw_map:
+        raise ConfigError(
+            "CAASIOPEIA_SOURCE_MAP is required when OSM_RETRIEVAL_BACKEND=caasiopeia"
+        )
+    raw_budget = env.get("CAASIOPEIA_TOKEN_BUDGET", "").strip()
+    try:
+        budget = int(raw_budget) if raw_budget else DEFAULT_CAASIOPEIA_TOKEN_BUDGET
+    except ValueError:
+        budget = 0
+    if not 1 <= budget <= MAX_CAASIOPEIA_TOKEN_BUDGET:
+        raise ConfigError(
+            f"CAASIOPEIA_TOKEN_BUDGET must be an integer from 1 to {MAX_CAASIOPEIA_TOKEN_BUDGET}"
+        )
+    return CaasiopeiaSettings(
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+        source_ids=_parse_source_map(raw_map, vault_paths),
+        token_budget=budget,
+    )

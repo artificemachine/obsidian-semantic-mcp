@@ -89,6 +89,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       EMBEDDING_MODEL: nomic-embed-text
+      # Optional Caasiopeia retrieval backend (see README). Empty = local ranking.
+      OSM_RETRIEVAL_BACKEND: ${OSM_RETRIEVAL_BACKEND:-}
+      CAASIOPEIA_BASE_URL: ${CAASIOPEIA_BASE_URL:-}
+      CAASIOPEIA_API_KEY: ${CAASIOPEIA_API_KEY:-}
+      CAASIOPEIA_SOURCE_MAP: ${CAASIOPEIA_SOURCE_MAP:-}
+      CAASIOPEIA_TOKEN_BUDGET: ${CAASIOPEIA_TOKEN_BUDGET:-}
     volumes:
       - ${OBSIDIAN_VAULT:-.}:/vault
       # - /path/to/vault2:/vault2  # add for multi-vault
