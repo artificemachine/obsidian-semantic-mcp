@@ -440,3 +440,58 @@ def test_a_graph_projection_failure_keeps_the_caasiopeia_results(caas_fs, caas, 
     assert "alpha" in text
     assert "wikilink expansion" in text.lower()
     assert "unavailable" in text.lower()
+
+
+# ── Source sync subfolder (CAASIOPEIA_SOURCE_ROOTS) ──────────────────────────
+
+@pytest.fixture
+def caas_rooted(caas, tmp_path, monkeypatch):
+    """A vault whose Caasiopeia source was synced from its ``notes`` subfolder."""
+    import server
+
+    vault = tmp_path / "main"
+    (vault / "notes" / "10_ai").mkdir(parents=True)
+    (vault / "notes" / "10_ai" / "spec.md").write_text("# spec\n", encoding="utf-8")
+    (vault / "other").mkdir()
+    (vault / "other" / "elsewhere.md").write_text("# elsewhere\n", encoding="utf-8")
+    (vault / "vaultroot.md").write_text("# root\n", encoding="utf-8")
+    (vault / "notes" / "sneaky.md").symlink_to(vault / "other" / "elsewhere.md")
+
+    paths = [str(vault)]
+    monkeypatch.setattr(server, "VAULT_PATHS", paths)
+    monkeypatch.setattr(server, "_VAULT_LIST", paths)
+    monkeypatch.setattr(server, "VAULT_PATH", paths[0])
+    server._init_retrieval_backend(
+        {
+            "OSM_RETRIEVAL_BACKEND": "caasiopeia",
+            "CAASIOPEIA_BASE_URL": "http://caas.invalid:8080",
+            "CAASIOPEIA_API_KEY": API_KEY,
+            "CAASIOPEIA_SOURCE_MAP": f"main={MAIN_SOURCE}",
+            "CAASIOPEIA_SOURCE_ROOTS": "main=notes",
+        },
+        paths,
+    )
+    return vault
+
+
+def test_source_root_prefix_makes_subfolder_external_ids_resolve(caas_rooted):
+    import server
+
+    seed = server._resolve_caas_seed_path(make_passage("10_ai/spec.md"))
+
+    assert seed == str(caas_rooted / "notes" / "10_ai" / "spec.md")
+
+
+def test_source_root_prefix_rejects_ids_that_are_not_under_the_sync_root(caas_rooted):
+    import server
+
+    # Vault-root-relative id: exists in the vault, but was never in this source.
+    assert server._resolve_caas_seed_path(make_passage("vaultroot.md")) is None
+    assert server._resolve_caas_seed_path(make_passage("notes/10_ai/spec.md")) is None
+    assert server._resolve_caas_seed_path(make_passage("../other/elsewhere.md")) is None
+
+
+def test_source_root_prefix_rejects_symlink_leaving_the_sync_root_inside_the_vault(caas_rooted):
+    import server
+
+    assert server._resolve_caas_seed_path(make_passage("sneaky.md")) is None
