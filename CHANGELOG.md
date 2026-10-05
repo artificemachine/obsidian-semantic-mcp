@@ -432,3 +432,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 2026-09-29: fix(caasiopeia): add CAASIOPEIA_SOURCE_ROOTS so graph expansion resolves seeds when a source was synced from a vault subfolder
 - 2026-09-30: chore(caasiopeia): add scripts/caasiopeia-cutover.sh operator helper (sources, key, apply, rollback, status); API key stays in the macOS Keychain, never in a file or argv
 - 2026-10-04: docs: record the working relationship with caasiopeia and tessera-mcp (docs/ARCH-caasiopeia-obsidian-tessera-relations.md, Related projects block in CLAUDE.md, AGENTS.md and GEMINI.md).
+- 2026-10-05: feat(caasiopeia): fall back to local pgvector and Ollama retrieval when the Caasiopeia backend has a temporary outage (connection failure, timeout, HTTP 429 or 5xx); configuration, authorization and invalid-response failures remain explicit. Adds unit and stdio coverage. Bump to 0.17.0.

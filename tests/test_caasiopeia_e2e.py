@@ -41,6 +41,11 @@ def fake_expand(paths, hops=1):
     return [(os.path.join(vault, "notes", "neighbor.md"), "neighbor body", paths[0])]
 
 server.expand_via_links = fake_expand
+
+async def fake_local_search(*args):
+    return [server.TextContent(type="text", text="local fallback result")]
+
+server._search_vault_local = fake_local_search
 asyncio.run(server.main())
 '''
 
@@ -244,16 +249,14 @@ def test_stdio_search_vault_uses_disposable_caas_and_expands_verified_links(
     assert API_KEY not in text
 
 
-def test_stdio_caas_outage_is_reported_and_never_falls_back_to_local_ranking(
+def test_stdio_caas_outage_falls_back_to_local_ranking(
     osm, caas_stand_in, tmp_path
 ):
     caas_stand_in.status = 503
 
     text = _search(osm)
 
-    assert "unavailable" in text.lower()
-    assert "HTTP 503" in text
-    assert "Local ranking was not used" in text
+    assert text == "local fallback result"
     assert not (tmp_path / "seeds.json").exists()
     assert API_KEY not in text
     assert "Traceback" not in text

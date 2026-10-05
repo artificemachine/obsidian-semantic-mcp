@@ -7,7 +7,7 @@ obsidian-semantic does call CaaSiopeia, but only in that direction and only for 
 ## Obsidian MCP to CaaSiopeia
 
 - The running container has `OSM_RETRIEVAL_BACKEND=caasiopeia` and `CAASIOPEIA_BASE_URL=http://host.docker.internal:3000`.
-- `search_vault` therefore sends its ranking to CaaSiopeia over HTTP (`obsidian-semantic-mcp/src/server.py:1937`), with no fallback to pgvector.
+- `search_vault` therefore sends its ranking to CaaSiopeia over HTTP (`obsidian-semantic-mcp/src/server.py:1937`), falling back to local pgvector and Ollama only for temporary CaaSiopeia failures (connection failure, timeout, HTTP 429 or 5xx).
 - The other tools (`get_file`, `write_file`, `recent_changes`, `append_content`) act directly on the vault files.
 
 ## CaaSiopeia to Obsidian MCP

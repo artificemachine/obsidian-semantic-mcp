@@ -31,7 +31,7 @@ usage() {
 }
 
 die() {
-  printf 'error: %s\n' "$1" >&2
+  echo "error: $1" >&2
   exit 1
 }
 
@@ -63,7 +63,7 @@ cmd_key() {
   key_line="$(printf '%s\n' "$out" | grep '^api_key=' || true)"
   [ -n "$key_line" ] || die "key create returned no api_key line"
   printf '%s\n' "$out" | grep -v '^api_key='
-  printf 'api key (shown once): %s\n' "${key_line#api_key=}"
+  echo "api key (shown once): ${key_line#api_key=}"
   printf '\nstore it now (paste at the hidden prompt):\n'
   # shellcheck disable=SC2016  # $USER is shown literally for the operator to run
   printf '  security add-generic-password -U -s %s -a "$USER" -w\n' "$KEYCHAIN_SERVICE"
@@ -86,8 +86,7 @@ cmd_apply() {
   export CAASIOPEIA_SOURCE_MAP="$VAULT_KEY=$CAASIOPEIA_SOURCE_ID"
   export CAASIOPEIA_SOURCE_ROOTS="$VAULT_KEY=$SOURCE_SUBFOLDER"
   recreate_mcp_server
-  printf 'applied: backend=caasiopeia base_url=%s vault=%s subfolder=%s\n' \
-    "$BASE_URL" "$VAULT_KEY" "$SOURCE_SUBFOLDER"
+  echo "applied: backend=caasiopeia base_url=$BASE_URL vault=$VAULT_KEY subfolder=$SOURCE_SUBFOLDER"
   printf 'a later "osm rebuild" recreates the container without these variables; rerun apply after it.\n'
 }
 
