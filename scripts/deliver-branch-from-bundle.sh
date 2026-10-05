@@ -57,6 +57,9 @@ git merge-base --is-ancestor "$base_commit" "$target_commit" \
 "$GITLEAKS_BIN" git --redact --no-banner \
   --log-opts="${base_commit}..${target_commit}" .
 
+git config --get credential.helper >/dev/null \
+  || die "GitHub credential helper is not configured; run gh auth login then gh auth setup-git as this account"
+
 git remote set-url origin "$REMOTE_URL"
 git push origin "${target_commit}:refs/heads/${branch}"
 
