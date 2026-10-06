@@ -1514,6 +1514,24 @@ _LOCAL_RETRIEVAL_FALLBACK = contextvars.ContextVar(
 )
 
 
+def _with_retrieval_provenance(results, backend: str):
+    """Prepend the effective search backend without contaminating cached results."""
+    return [
+        TextContent(
+            type="text",
+            text=f"_Retrieval backend: {backend}._\n\n{result.text}",
+        )
+        for result in results
+    ]
+
+
+def _local_search_response(results):
+    """Label direct local searches; the Caasiopeia caller labels fallbacks."""
+    if _LOCAL_RETRIEVAL_FALLBACK.get():
+        return results
+    return _with_retrieval_provenance(results, "local")
+
+
 def _caas_failure_text(exc: CaasError) -> str:
     reason = next(text for kind, text in _CAAS_FAILURE_REASONS if isinstance(exc, kind))
     status = f" (HTTP {exc.status})" if exc.status else ""
@@ -1684,8 +1702,11 @@ async def _search_vault_caasiopeia(
                     type(exc).__name__, exc.trace_id, exc.status)
         if exc.retryable:
             log.warning("search_vault falling back to local ranking after retryable caasiopeia failure")
-            return await _search_vault_local(
+            results = await _search_vault_local(
                 query, limit, min_similarity, mode, vault_filter, vault_ids, graph_expand
+            )
+            return _with_retrieval_provenance(
+                results, "local (fallback from Caasiopeia)"
             )
         return [TextContent(type="text", text=_caas_failure_text(exc))]
     except Exception as exc:
@@ -1708,14 +1729,18 @@ async def _search_vault_caasiopeia(
             text = f"No Caasiopeia results met min_similarity={min_similarity}."
         else:
             text = "No results from Caasiopeia for this query."
-        return [TextContent(type="text", text=text)]
+        return _with_retrieval_provenance(
+            [TextContent(type="text", text=text)], "Caasiopeia"
+        )
 
     parts = _render_caas_passages(shown)
     if graph_expand:
         parts.extend(await _caas_graph_parts(shown, result.trace_id))
     if result.degraded:
         parts.append(f"_Caasiopeia answered in degraded mode ({result.degradation_reason})._")
-    return [TextContent(type="text", text="\n---\n".join(parts))]
+    return _with_retrieval_provenance(
+        [TextContent(type="text", text="\n---\n".join(parts))], "Caasiopeia"
+    )
 
 
 # ───────────────────────────────── MCP Server ────────────────────────────────
@@ -1980,7 +2005,7 @@ async def call_tool(name: str, arguments: dict):
         ).hexdigest()
         cached = _search_cache.get(cache_key)
         if cached is not None:
-            return cached
+            return _local_search_response(cached)
 
         try:
             _t0 = time.monotonic()
@@ -2052,14 +2077,14 @@ async def call_tool(name: str, arguments: dict):
 
             if not results:
                 if _INDEXING_IN_PROGRESS.is_set():
-                    return [TextContent(
+                    return _local_search_response([TextContent(
                         type="text",
                         text="Vault indexing is in progress — no results yet. Try again in a moment.",
-                    )]
-                return [TextContent(
+                    )])
+                return _local_search_response([TextContent(
                     type="text",
                     text="No indexed notes found. Try running reindex_vault first.",
-                )]
+                )])
 
             parts = []
             for path, content, sim in results:
@@ -2088,11 +2113,13 @@ async def call_tool(name: str, arguments: dict):
             )
 
             _search_cache.set(cache_key, result)
-            return result
+            return _local_search_response(result)
 
         except Exception as e:
             log.error("search_vault error: %s", e)
-            return [TextContent(type="text", text=f"Search error: {e}")]
+            return _local_search_response([
+                TextContent(type="text", text=f"Search error: {e}")
+            ])
 
     # ── list_indexed_notes ────────────────────────────────────────────────────
     elif name == "list_indexed_notes":

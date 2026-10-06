@@ -196,6 +196,7 @@ def test_output_renders_provenance_and_prefixes_the_vault_when_there_are_several
 
     text = search(server)
 
+    assert text.startswith("_Retrieval backend: Caasiopeia._")
     assert "**main/notes/foo.md**" in text
     assert "Top > Sub" in text
     assert "score: 0.83" in text
@@ -262,8 +263,19 @@ def test_search_vault_falls_back_to_local_results_for_temporary_caas_failures(
 
     text = search(server)
 
-    assert text == "local fallback result"
+    assert text.startswith("_Retrieval backend: local (fallback from Caasiopeia)._")
+    assert text.endswith("local fallback result")
     assert calls == [("find the plan", 5, 0.0, "hybrid", "", None, False)]
+
+
+def test_retrieval_provenance_marks_direct_local_results():
+    import server
+
+    results = server._with_retrieval_provenance(
+        [server.TextContent(type="text", text="local result")], "local"
+    )
+
+    assert results[0].text == "_Retrieval backend: local._\n\nlocal result"
 
 
 def test_an_unexpected_client_exception_is_reported_without_a_traceback(caas):
@@ -305,7 +317,8 @@ def test_local_backend_is_untouched_by_the_caas_branch(monkeypatch):
 
     text = search(server, query="local only query")
 
-    assert text.startswith("Search error:")
+    assert text.startswith("_Retrieval backend: local._")
+    assert "Search error:" in text
 
 
 def test_a_rejected_client_configuration_is_reported_not_raised(caas, monkeypatch):
