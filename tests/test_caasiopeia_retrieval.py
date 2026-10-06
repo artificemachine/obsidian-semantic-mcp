@@ -217,16 +217,13 @@ def test_degraded_answers_say_so(caas):
 @pytest.mark.parametrize(
     "error, expected",
     [
-        (cc.CaasUnavailable("Caasiopeia is unavailable (HTTP 503)", trace_id=TRACE, status=503),
-         "unavailable"),
-        (cc.CaasTimeout("Caasiopeia request timed out", trace_id=TRACE), "timed out"),
         (cc.CaasUnauthorized("Caasiopeia rejected the credential (HTTP 401)", trace_id=TRACE, status=401),
          "CAASIOPEIA_API_KEY"),
         (cc.CaasInvalidResponse("passage.score missing or of the wrong type", trace_id=TRACE),
          "invalid response"),
     ],
 )
-def test_search_vault_does_not_fall_back_to_local_results_when_caas_fails(
+def test_search_vault_does_not_fall_back_to_local_results_for_non_retryable_caas_failures(
     caas, error, expected
 ):
     import server
@@ -240,6 +237,33 @@ def test_search_vault_does_not_fall_back_to_local_results_when_caas_fails(
     assert "local" in text.lower(), "the message must say local ranking was not used"
     assert API_KEY not in text
     assert "Traceback" not in text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        cc.CaasUnavailable("Caasiopeia is unavailable (HTTP 503)", trace_id=TRACE, status=503),
+        cc.CaasTimeout("Caasiopeia request timed out", trace_id=TRACE),
+    ],
+)
+def test_search_vault_falls_back_to_local_results_for_temporary_caas_failures(
+    caas, monkeypatch, error
+):
+    import server
+
+    calls = []
+
+    async def local_search(query, limit, min_similarity, mode, vault_filter, vault_ids, graph_expand):
+        calls.append((query, limit, min_similarity, mode, vault_filter, vault_ids, graph_expand))
+        return [server.TextContent(type="text", text="local fallback result")]
+
+    monkeypatch.setattr(server, "_search_vault_local", local_search, raising=False)
+    caas.error = error
+
+    text = search(server)
+
+    assert text == "local fallback result"
+    assert calls == [("find the plan", 5, 0.0, "hybrid", "", None, False)]
 
 
 def test_an_unexpected_client_exception_is_reported_without_a_traceback(caas):

@@ -58,6 +58,12 @@ osm help                                              # Full flag reference
 
 Current: `0.12.2` (pyproject.toml). Entry points: `osm` (CLI via `osm_init:main`), `obsidian-semantic-mcp` (MCP server via `src.launcher:main`).
 
+## Related projects
+caasiopeia, obsidian-semantic-mcp and tessera-mcp work together. CaaSiopeia is the shared retrieval engine: the other two call it, and it calls neither of them.
+- obsidian-semantic-mcp: `search_vault` delegates ranking to CaaSiopeia when `OSM_RETRIEVAL_BACKEND=caasiopeia`. Its file tools (`get_file`, `write_file`, `append_content`, `recent_changes`) act on the vault directly.
+- tessera-mcp: pushes extracted non-markdown documents into CaaSiopeia, and its `search` and `show` always query CaaSiopeia.
+Details: `docs/ARCH-caasiopeia-obsidian-tessera-relations.md`.
+
 ## Key Files
 
 | File | Purpose |

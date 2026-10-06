@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import hashlib
 import logging
 import os
@@ -1508,12 +1509,36 @@ _CAAS_FAILURE_REASONS = (
     (CaasRejected, "Caasiopeia rejected the request"),
 )
 
+_LOCAL_RETRIEVAL_FALLBACK = contextvars.ContextVar(
+    "local_retrieval_fallback", default=False
+)
+
 
 def _caas_failure_text(exc: CaasError) -> str:
     reason = next(text for kind, text in _CAAS_FAILURE_REASONS if isinstance(exc, kind))
     status = f" (HTTP {exc.status})" if exc.status else ""
     trace = f" [trace {exc.trace_id}]" if exc.trace_id else ""
     return f"Search error: {reason}{status}{trace}. Local ranking was not used."
+
+
+async def _search_vault_local(
+    query, limit, min_similarity, mode, vault_filter, vault_ids, graph_expand
+):
+    """Run one search through the local branch without mutating global backend state."""
+    token = _LOCAL_RETRIEVAL_FALLBACK.set(True)
+    arguments = {
+        "query": query,
+        "limit": limit,
+        "min_similarity": min_similarity,
+        "mode": mode,
+        "graph_expand": graph_expand,
+    }
+    if vault_filter:
+        arguments["vault"] = vault_filter
+    try:
+        return await call_tool("search_vault", arguments)
+    finally:
+        _LOCAL_RETRIEVAL_FALLBACK.reset(token)
 
 
 def _caas_source_scope(vault_ids: list[str] | None) -> list[str] | None:
@@ -1618,11 +1643,13 @@ async def _caas_graph_parts(passages, trace_id: str) -> list[str]:
     return _render_neighbor_parts(neighbors)
 
 
-async def _search_vault_caasiopeia(query, limit, min_similarity, mode, vault_ids, graph_expand):
+async def _search_vault_caasiopeia(
+    query, limit, min_similarity, mode, vault_filter, vault_ids, graph_expand
+):
     """search_vault when the caasiopeia backend is selected.
 
-    Never falls back to local ranking: a failure is reported as a failure, so
-    two retrieval policies are never mixed in one answer.
+    Retryable Caasiopeia failures fall back to local ranking. Configuration,
+    authorization, and response-validation failures remain explicit errors.
     """
     try:
         client = _get_caas_client()
@@ -1655,6 +1682,11 @@ async def _search_vault_caasiopeia(query, limit, min_similarity, mode, vault_ids
     except CaasError as exc:
         log.warning("search_vault caasiopeia failure=%s trace=%s status=%s",
                     type(exc).__name__, exc.trace_id, exc.status)
+        if exc.retryable:
+            log.warning("search_vault falling back to local ranking after retryable caasiopeia failure")
+            return await _search_vault_local(
+                query, limit, min_similarity, mode, vault_filter, vault_ids, graph_expand
+            )
         return [TextContent(type="text", text=_caas_failure_text(exc))]
     except Exception as exc:
         # Type name only: an unexpected exception's text could carry a secret.
@@ -1934,11 +1966,12 @@ async def call_tool(name: str, arguments: dict):
                          f"Available: {', '.join(os.path.basename(v) for v in VAULT_PATHS)}",
                 )]
 
-        if RETRIEVAL_BACKEND == RETRIEVAL_BACKEND_CAASIOPEIA:
-            # Not cached locally: Caasiopeia has its own cache, and a stale local
-            # copy could outlive an outage the caller should see.
+        if (
+            RETRIEVAL_BACKEND == RETRIEVAL_BACKEND_CAASIOPEIA
+            and not _LOCAL_RETRIEVAL_FALLBACK.get()
+        ):
             return await _search_vault_caasiopeia(
-                query, limit, min_similarity, mode, vault_ids, graph_expand
+                query, limit, min_similarity, mode, vault_filter, vault_ids, graph_expand
             )
 
         # Check LRU cache before hitting Ollama + DB

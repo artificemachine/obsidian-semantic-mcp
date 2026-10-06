@@ -475,7 +475,7 @@ By default `search_vault` ranks notes locally (pgvector + Ollama). Setting `OSM_
 Rules of the opt-in mode:
 
 - **Startup validation.** A missing or invalid variable stops the server at startup, naming the variable but never its value.
-- **No fallback.** If Caasiopeia is unreachable, times out, rejects the credential or returns an invalid response, `search_vault` says so (with a trace id) and does not return locally ranked notes.
+- **Fallback on temporary outages.** If Caasiopeia is unreachable, times out, returns HTTP 429 or a 5xx response, `search_vault` automatically retries through the local pgvector and Ollama backend. Invalid configuration, rejected credentials, invalid requests and invalid responses remain explicit errors.
 - **Mode mapping.** `hybrid` maps to `hybrid`, `semantic` to `dense`, `keyword` to `lexical`.
 - **Source identity.** `graph_expand` follows wikilinks only from passages whose `external_id` is the forward-slash path, relative to the directory the source was synced from (the vault root, or the `CAASIOPEIA_SOURCE_ROOTS` subfolder), of an existing note inside that directory in the vault mapped to the passage's source. Any other `external_id` (absolute, `..`, unmapped source, missing file, symlink out of the vault) is ignored for expansion. Wikilink expansion still reads the local `notes` and `note_links` tables, so the local index must keep running. The `external_id` format is what Caasiopeia's sync documents for a root-relative source; verify it against a real response before relying on graph expansion.
 - **Rollback.** Unset the variables or set `OSM_RETRIEVAL_BACKEND=local` and restart the MCP server. Nothing in Caasiopeia is modified.
