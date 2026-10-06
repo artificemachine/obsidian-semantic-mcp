@@ -35,4 +35,4 @@ def test_delivery_script_pins_the_mandatory_scanner_and_remote():
     assert 'REMOTE_URL="https://github.com/artificemachine/obsidian-semantic-mcp.git"' in content
     assert 'GITLEAKS_BIN="/usr/local/bin/gitleaks"' in content
     assert '"$GITLEAKS_BIN" git --redact --no-banner' in content
-    assert "git config --get credential.helper" in content
+    assert "credential.https://github.com.helper" in content

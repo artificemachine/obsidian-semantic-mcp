@@ -57,7 +57,9 @@ git merge-base --is-ancestor "$base_commit" "$target_commit" \
 "$GITLEAKS_BIN" git --redact --no-banner \
   --log-opts="${base_commit}..${target_commit}" .
 
-git config --get credential.helper >/dev/null \
+(git config --get-all credential.https://github.com.helper 2>/dev/null || true
+ git config --get-all credential.helper 2>/dev/null || true) \
+  | grep -q '[^[:space:]]' \
   || die "GitHub credential helper is not configured; run gh auth login then gh auth setup-git as this account"
 
 git remote set-url origin "$REMOTE_URL"
