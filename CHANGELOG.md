@@ -436,3 +436,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 2026-10-06: chore(delivery): add a self-contained VM740 bundle delivery script that validates bundle ancestry, runs the mandatory gitleaks range scan, pushes an explicit commit to its feature branch, and verifies the remote SHA without storing credentials.
 - 2026-10-06: fix(delivery): stop after the mandatory secret scan with an actionable error when the VM740 account has no GitHub HTTPS credential helper, before any push is attempted.
 - 2026-10-06: fix(delivery): recognize GitHub CLI's host-specific `credential.https://github.com.helper` configuration as well as a global Git credential helper.
+- 2026-10-06: feat(search): show the effective retrieval backend in every `search_vault` result, distinguishing Caasiopeia, direct local ranking, and automatic Caasiopeia fallback to local retrieval.

@@ -234,6 +234,7 @@ def test_stdio_search_vault_uses_disposable_caas_and_expands_verified_links(
 
     text = _search(osm, graph_expand=True, limit=5)
 
+    assert text.startswith("_Retrieval backend: Caasiopeia._")
     request = caas_stand_in.requests[0]
     assert request["path"] == "/v1/context"
     assert request["body"]["source_ids"] == [SOURCE_ID]
@@ -256,7 +257,8 @@ def test_stdio_caas_outage_falls_back_to_local_ranking(
 
     text = _search(osm)
 
-    assert text == "local fallback result"
+    assert text.startswith("_Retrieval backend: local (fallback from Caasiopeia)._")
+    assert text.endswith("local fallback result")
     assert not (tmp_path / "seeds.json").exists()
     assert API_KEY not in text
     assert "Traceback" not in text
