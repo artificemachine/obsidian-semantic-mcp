@@ -426,3 +426,13 @@ uv run --project ../langfuse-bridge-mcp pytest ../langfuse-bridge-mcp/tests/test
 - Execute independent capture and rollup slices with scoped subagents; dashboard waits for rollup schema, bridge waits for generated capture rows, activation waits for both. Original dependent slices remain serialized.
 - Langfuse receives backend/fallback only. No result-count bucket is exported.
 - Revised active-work estimate: 7h sequential equivalent; independent capture may overlap OSM work. External CI and credential waits are separate.
+
+## Build outcome — 2026-10-07
+
+- Shipped iterations 1–4: OSM commit 34a0f32, PR76 merged at d6f0aa3; bridge commit d126bc5, private PR8 merged at 051fa366; local-only capture commit 4f63b7f. Installed noneditable wheels OSM0.18.0, bridge0.2.0, capture0.4.0; rebuilt OSM Docker0.18.0.
+- Validation: OSM591passed31skipped twice; capture42passed; bridge152passed1skipped with the existing CI deployment exclusion. Real Caasiopeia searches and aggregate increments reproduced; installed capture emitted metadata-only backend/fallback.
+- Deviations: explicitly labelled hourly window; minimal local-only capture required before bridge parsing; existing host deployment assertions were not rewritten.
+- Pending iteration5: configured Langfuse authentication returns HTTP502, reproduced twice. No alternate authentication or out-of-scope infrastructure changes; remote trace and live bridge shutdown validation remain unverified.
+- Learned: MCP2 client result uses is_error; large Prometheus counts require lossless formatting; rebuild requires reapplying the existing Caasiopeia environment.
+
+- Owner decision after the build: defer Langfuse activation and continue other implementation plans. Iteration 5 is explicitly skipped for this session; no waiting for a network route or Langfuse recovery.

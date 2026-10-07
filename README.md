@@ -131,12 +131,12 @@ It then:
 - Installs prerequisites or verifies they already exist (Docker is installed and started automatically if missing)
 - Pulls `nomic-embed-text` if needed
 - Writes a `.env` file (gitignored) with your vault path and credentials
-- Updates MCP client config automatically for **Claude Desktop**, **Claude Code CLI**, **OpenCode**, and **pi** (whichever are installed)
-- Uses the repo launcher script in generated MCP entries, so startup does not depend on a raw Docker command or container-name-specific config
+- Updates MCP client config automatically for **Claude Desktop**, **Claude Code CLI**, **Codex CLI / ChatGPT Desktop**, **OpenCode**, and **pi** (whichever are installed)
+- Uses the installed `obsidian-semantic-mcp` executable in generated MCP entries, independent of the source checkout
 
 ### 2. Restart your MCP client(s)
 
-Restart Claude Desktop / OpenCode to pick up the new server. For Claude Code CLI, the entry is registered live; verify with `claude mcp list`. For pi, run `/reload` inside an active session or restart pi.
+Restart Claude Desktop / OpenCode to pick up the new server. For Claude Code CLI, verify with `claude mcp list`. Codex CLI and ChatGPT Desktop share the MCP configuration on the same Codex host: verify with `codex mcp list`, then restart ChatGPT Desktop and check `/mcp`. For pi, run `/reload` inside an active session or restart pi.
 
 > **pi users:** `osm init` also patches `~/.pi/agent/extensions/mcp-bridge.ts` if
 > present. obsidian-semantic requires `heartbeat: true` and a spawn-time heartbeat
@@ -145,19 +145,31 @@ Restart Claude Desktop / OpenCode to pick up the new server. For Claude Code CLI
 
 > **Manual config (only if `osm init` could not detect your client)**
 >
-> Add the same block to `~/.opencode.json`, `claude_desktop_config.json`, or whatever JSON config your MCP client uses:
+> For Claude Desktop, add this block to `claude_desktop_config.json`:
 > ```json
 > {
 >   "mcpServers": {
 >     "obsidian-semantic": {
->       "command": "/absolute/path/to/obsidian-semantic-mcp/scripts/obsidian-semantic-mcp",
+>       "command": "obsidian-semantic-mcp",
 >       "args": [],
 >       "env": {}
 >     }
 >   }
 > }
 > ```
-> Replace `/absolute/path/to/obsidian-semantic-mcp` with your local clone path. The launcher prefers the running Docker stack and falls back to the repo-local `.venv` when Docker is unavailable.
+> Use the installed executable on `PATH`. Native mode reads its private OSM runtime configuration; for Docker, add `"OSM_DOCKER": "1"` to `env`. The installed executable does not depend on the source checkout.
+
+### Codex CLI and ChatGPT Desktop
+
+`osm init` uses the shared Codex MCP configuration: `$CODEX_HOME/config.toml` when `CODEX_HOME` is set, otherwise `~/.codex/config.toml`. It preserves unrelated settings, comments, and existing server entries. Malformed configuration is left unchanged. Existing OSM entries are retained; review them manually if migrating an older setup. Newly generated native entries keep database credentials in OSM's private runtime file.
+
+```toml
+[mcp_servers.obsidian-semantic]
+command = "obsidian-semantic-mcp"
+args = []
+```
+
+Docker entries additionally set `env = { OSM_DOCKER = "1" }`; this is a mode flag, not a credential. A repeated registration leaves the file byte-identical. `osm remove` removes only OSM's Codex table and keeps unrelated TOML. ChatGPT Web uses separate remote integrations. See the [official OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
 ### 3. First-run indexing
 
@@ -178,7 +190,7 @@ Prefer not to run Docker? `osm init --mode 1` installs PostgreSQL + pgvector and
 uv run osm init --mode 1 --vault "/path/to/your/vault"
 ```
 
-This mode registers the MCP client entry with `OBSIDIAN_VAULT`/`DATABASE_URL` set directly on the entry (Docker mode instead loads a `.env` the launcher finds via the running container's project root) — restart your MCP client afterward the same as any other mode.
+Native mode stores its vault and database configuration in `~/.config/obsidian-semantic-mcp/native_runtime.json`, an owner-only file with mode `0600`. Native MCP entries contain no environment values. Explicit process environment values take precedence; Docker entries select `OSM_DOCKER=1` so an earlier native setup cannot change their mode. `osm remove` removes the native runtime file while preserving unrelated OSM configuration; it also removes containers and indexed data, so review its confirmation before using it.
 
 ### Manual start (without wizard)
 
@@ -194,7 +206,7 @@ First run pulls all images and the `nomic-embed-text` model automatically. This 
 |---------|------|-------------|
 | PostgreSQL + pgvector | 5433 | Vector storage (avoids conflict with host pg) |
 | Ollama | 11435 | Local embeddings (auto-pulls model) |
-| MCP server | stdio | Clients connect via `scripts/obsidian-semantic-mcp`, which prefers Docker and falls back to local `.venv` |
+| MCP server | stdio | Clients connect via the installed `obsidian-semantic-mcp` executable |
 | Dashboard | 8484 | http://localhost:8484 |
 
 ### Useful commands
@@ -694,7 +706,7 @@ Add to `$HOME/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "obsidian-semantic": {
-      "command": "/absolute/path/to/obsidian-semantic-mcp/scripts/obsidian-semantic-mcp",
+      "command": "obsidian-semantic-mcp",
       "args": [],
       "env": {}
     }

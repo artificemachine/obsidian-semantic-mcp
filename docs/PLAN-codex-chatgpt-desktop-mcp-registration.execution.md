@@ -1,0 +1,12 @@
+# MCP client registration execution checkpoints
+
+- 2026-10-07: Owner requested remaining plans and implementation; session reversible work and ship/install authorization persists. Langfuse explicitly deferred.
+- Base d6f0aa3; native runtime slice delegated with synthetic fixture fence. Registration waits for native validation. Official shared-client configuration premise independently verified.
+- Iteration 1 validated: RED16 failures; GREEN204 passed in135.38s. Parent independently verified12 native/runtime/Docker tests. Atomic0600 native configuration, safe errors, explicit environment precedence, native-to-Docker override, and narrow uninstall are implemented. No live configuration writes.
+- Iteration 2 dispatched only after iteration1 validation; writable scope includes a global synthetic Codex path fixture to prevent accidental host writes.
+- Iteration 2: RED17 failures; GREEN227 targeted tests and46 post-fixture focused tests. Parent independently verified21 Codex tests; no new configured lint findings. Final independent review reproduced a concurrent TOML edit loss twice; remediation adds source-change detection before replacement.
+- Iteration 3: shared-client documentation updated, including private native configuration, portable installed executable, existing-entry preservation and targeted removal. Shipping awaits conflict remediation and full integrated validation.
+- Independent final review: concurrent registration and removal conflicts now preserve newer contents, reproduced twice each. Parent core suite: 49 passed. Integrated suite exposed the dependency inventory omitting the shipped CLI; a focused contract correction is being tested without adding an allowlist exception.
+- Integrated RED: 2 failed, 631 passed, 31 skipped. Dependency inventory was corrected to include declared runtime CLI modules without changing the allowlist; missing-private-file native mode was restored to load its legacy project .env while actual private native configuration still excludes Docker settings.
+- Parent compatibility recheck: 37 passed. Final full suite is running after those corrections; no production client or vault configuration has been touched.
+- Final integrated validation: 637 passed, 31 skipped in 312.27s. Independent core checks: 49 passed; compatibility and dependency checks: 37 passed. Security scan: 105 files, zero findings. Wheel 0.19.0 source bytes match the reviewed CLI and launcher; SHA256 e80e72bb23f32408a8986ea90b96a3256fab77c9381bcd46072f0b08f9187be6.

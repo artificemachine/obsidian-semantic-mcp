@@ -26,11 +26,16 @@ import shutil
 import subprocess
 import sys
 import time
+import stat
+import tempfile
+import tomlkit
 import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
 import secrets
+
+from src.launcher import OSM_CONFIG_DIR
 
 # Ensure stdout/stderr can handle Unicode on Windows (cp1252 etc.)
 if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8":
@@ -316,7 +321,6 @@ def prompt_persistent_storage(include_ollama=False):
 
 # ── Prerequisite checks ───────────────────────────────────────────────────────
 
-OSM_CONFIG_DIR = Path.home() / ".config" / "obsidian-semantic-mcp"
 PROJECT_ROOT_FILE = OSM_CONFIG_DIR / "project_root"
 
 # Directory holding this module. In an editable / dev / install.sh layout the
@@ -1408,15 +1412,113 @@ def register_pi_agent():
 # ── Cross-client registration fan-out ─────────────────────────────────────────
 
 
+def _codex_cfg_path() -> Path:
+    directory = os.environ.get("CODEX_HOME")
+    return (Path(directory).expanduser() if directory else Path.home() / ".codex") / "config.toml"
+
+
+def _codex_config_bytes(path):
+    if path.is_symlink():
+        raise ValueError("unsafe Codex configuration file")
+    if not path.exists():
+        return None
+    if not stat.S_ISREG(path.stat().st_mode):
+        raise ValueError("unsafe Codex configuration file")
+    return path.read_bytes()
+
+
+def _read_codex_config(path):
+    original = _codex_config_bytes(path)
+    cfg = tomlkit.document() if original is None else tomlkit.parse(original.decode("utf-8"))
+    servers = cfg.get("mcp_servers", {})
+    if not isinstance(servers, dict):
+        raise TypeError("invalid Codex server table")
+    if "obsidian-semantic" in servers and not isinstance(servers["obsidian-semantic"], dict):
+        raise TypeError("invalid Codex OSM table")
+    return cfg, original
+
+
+def _write_codex_config(path, cfg, original):
+    content = tomlkit.dumps(cfg)
+    if DRY_RUN:
+        _dry(f"write {path}", "preserving unrelated Codex settings")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".osm-codex-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as target:
+            if os.name == "posix":
+                os.fchmod(target.fileno(), 0o600)
+            target.write(content)
+            target.flush()
+            os.fsync(target.fileno())
+        if _codex_config_bytes(path) != original:
+            raise FileExistsError("Codex configuration changed concurrently")
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def update_codex_config(entry):
+    """Register the installed launcher for CLI and same-host desktop clients."""
+    path = _codex_cfg_path()
+    if not cmd_exists("codex") and not path.exists() and not path.is_symlink():
+        return
+    try:
+        cfg, original = _read_codex_config(path)
+        servers = cfg.get("mcp_servers", {})
+        if "obsidian-semantic" in servers:
+            ok("Codex: obsidian-semantic already configured")
+            return
+        if (entry.get("command") != "obsidian-semantic-mcp"
+                or entry.get("args", []) != []
+                or not isinstance(entry.get("env", {}), dict)):
+            raise ValueError("nonportable Codex server entry")
+        env = entry.get("env", {})
+        if any(name != "OSM_DOCKER" or value not in ("0", "1") for name, value in env.items()):
+            raise ValueError("unsupported Codex environment")
+        server = tomlkit.table()
+        server["command"] = "obsidian-semantic-mcp"
+        server["args"] = []
+        if env:
+            server["env"] = dict(env)
+        if "mcp_servers" not in cfg:
+            cfg["mcp_servers"] = tomlkit.table()
+        cfg["mcp_servers"]["obsidian-semantic"] = server
+        _write_codex_config(path, cfg, original)
+        ok("Codex CLI / ChatGPT Desktop: obsidian-semantic configured")
+        info("Restart the desktop client; use codex mcp list or /mcp to verify")
+    except (OSError, ValueError, TypeError, tomlkit.exceptions.TOMLKitError) as exc:
+        warn(f"Codex configuration unchanged; registration failed ({type(exc).__name__})")
+
+
+def remove_codex_config():
+    """Remove only OSM's server table, retaining all unrelated TOML content."""
+    path = _codex_cfg_path()
+    if not path.exists() and not path.is_symlink():
+        return
+    try:
+        cfg, original = _read_codex_config(path)
+        servers = cfg.get("mcp_servers", {})
+        if "obsidian-semantic" not in servers:
+            return
+        del servers["obsidian-semantic"]
+        _write_codex_config(path, cfg, original)
+        ok("Removed obsidian-semantic from Codex configuration")
+    except (OSError, ValueError, TypeError, tomlkit.exceptions.TOMLKitError) as exc:
+        warn(f"Codex configuration unchanged; removal failed ({type(exc).__name__})")
+
+
 def register_with_clients(entry):
     """Register the MCP entry with every supported client in one shot.
 
-    Today: Claude Desktop, Claude Code CLI, OpenCode, pi agent. Adding a new
-    client (Continue, Cursor, Codex CLI, ...) is a one-line change here.
+    Claude Desktop, Claude Code CLI, OpenCode, Codex CLI / ChatGPT Desktop,
+    and pi agent share the installed portable launcher.
     """
     update_claude_config(entry)
     register_claude_cli(entry)
     update_opencode_config(entry)
+    update_codex_config(entry)
     register_pi_agent()
     _write_project_root_config()
 
@@ -1426,29 +1528,20 @@ def register_with_clients(entry):
 
 def _docker_entry():
     """MCP client config entry for all Docker-based installs."""
-    return {"command": "obsidian-semantic-mcp", "args": [], "env": {}}
+    return {"command": "obsidian-semantic-mcp", "args": [], "env": {"OSM_DOCKER": "1"}}
 
 
 def _native_entry(vault, db_url):
-    """MCP client config entry for local/native installs.
+    """Runtime configuration belongs to OSM, not its MCP clients."""
+    return {"command": "obsidian-semantic-mcp", "args": [], "env": {}}
 
-    Unlike Docker mode (whose entry launches into a container that already
-    has its own env from docker-compose), a native install's launcher runs
-    the server in-process and has no `.env` file to fall back on — the MCP
-    client's own `env` dict is the only environment the process ever sees.
 
-    `vault` is a list of one or more paths (see prompt_vault()); mirrors
-    server.py's _parse_vault_paths() convention — OBSIDIAN_VAULTS
-    (comma-separated) for multi-vault, OBSIDIAN_VAULT for the single-vault
-    case.
-    """
-    vaults = [vault] if isinstance(vault, str) else list(vault)
-    env = {"DATABASE_URL": db_url}
-    if len(vaults) > 1:
-        env["OBSIDIAN_VAULTS"] = ",".join(vaults)
-    else:
-        env["OBSIDIAN_VAULT"] = vaults[0]
-    return {"command": "obsidian-semantic-mcp", "args": [], "env": env}
+def _write_native_runtime(vault, db_url):
+    from src.launcher import write_native_runtime
+    if DRY_RUN:
+        _dry(f"write {OSM_CONFIG_DIR / 'native_runtime.json'}", "owner-only native runtime configuration")
+        return
+    write_native_runtime(vault, db_url, config_dir=OSM_CONFIG_DIR)
 
 
 # ── Docker compose helpers ────────────────────────────────────────────────────
@@ -1798,6 +1891,11 @@ def mode_native_macos():
 
     # ── Claude Desktop + CLI config ───────────────────────────────────────────
     header(f"MCP client configuration  ({_mcp_clients_label()})")
+    try:
+        _write_native_runtime(vault, db_url)
+    except (OSError, ValueError, TypeError) as exc:
+        fail(f"Could not write native runtime configuration ({type(exc).__name__})")
+        sys.exit(1)
     entry = _native_entry(vault, db_url)
     register_with_clients(entry)
 
@@ -2660,8 +2758,10 @@ def cmd_remove():
         "    • Stop and remove all Docker containers and volumes  (all indexed embeddings lost)"
     )
     print("    • Delete .env from this project")
+    print("    • Delete OSM's private native runtime configuration")
     print("    • Remove obsidian-semantic from claude_desktop_config.json")
     print("    • Remove obsidian-semantic from Claude Code CLI  ($HOME/.claude.json)")
+    print("    • Remove obsidian-semantic from Codex CLI / ChatGPT Desktop configuration")
     print(f"    • Delete the osm launcher from {_osm_launcher_path()}")
     print()
 
@@ -2758,6 +2858,19 @@ def cmd_remove():
     # ── OpenCode config ───────────────────────────────────────────────────────
     header("Updating OpenCode config")
     remove_opencode_config()
+    header("Updating Codex CLI / ChatGPT Desktop config")
+    remove_codex_config()
+
+    header("Removing native runtime configuration")
+    if DRY_RUN:
+        _dry(f"remove {OSM_CONFIG_DIR / 'native_runtime.json'}")
+    else:
+        from src.launcher import remove_native_runtime
+        try:
+            remove_native_runtime(config_dir=OSM_CONFIG_DIR)
+        except (OSError, ValueError) as exc:
+            fail(f"Could not remove native runtime configuration ({type(exc).__name__})")
+            sys.exit(1)
 
     # ── osm launcher ──────────────────────────────────────────────────────────
     header("Removing osm launcher")

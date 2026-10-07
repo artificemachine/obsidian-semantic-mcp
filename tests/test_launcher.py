@@ -4,12 +4,20 @@ tests/test_launcher.py — unit tests for src/launcher.py
 All Docker and server calls are mocked — no real Docker or Postgres required.
 """
 import sys
+import json
+import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+@pytest.fixture(autouse=True)
+def isolate_runtime(monkeypatch, tmp_path):
+    from src import launcher
+    monkeypatch.setattr(launcher, "OSM_CONFIG_DIR", tmp_path / "osm-config")
 
 
 
@@ -189,47 +197,173 @@ def test_missing_db_config_exits(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# 8. osm_init's native MCP entry must actually be launchable
-#
-# Regression for a bug found by the 2026-07-21 arch-audit: `osm init --mode 1`
-# (native macOS) registered a Claude Desktop/Code entry with an empty `env`
-# dict, and never wrote a `.env` file for the launcher to load either — so
-# the registered entry could not launch. `_native_entry()` accepted `vault`/
-# `db_url` params and silently discarded them. This test simulates the real
-# launch: `_native_entry()`'s returned `env` is the *only* environment the
-# subprocess gets (matching how an MCP client launches a configured command),
-# fed straight into `_validate_env()`.
+# 8. Native MCP entries load private OSM runtime settings before validation.
 # ---------------------------------------------------------------------------
 
-def test_native_entry_env_is_launchable(monkeypatch):
+def test_native_entry_env_is_launchable(monkeypatch, tmp_path):
     import osm_init
     from src import launcher
 
     entry = osm_init._native_entry(["/path/to/vault"], "postgresql://localhost/obsidian_brain")
 
     monkeypatch.setattr("os.environ", entry["env"])
-
+    launcher.write_native_runtime(["/path/to/vault"], "postgresql://localhost/obsidian_brain")
+    launcher._load_native_runtime()
     launcher._validate_env()  # must not raise/exit
+    assert os.environ["OSM_DOCKER"] == "0"
+    assert (launcher.OSM_CONFIG_DIR / "native_runtime.json").stat().st_mode & 0o777 == 0o600
 
 
 def test_native_entry_multi_vault_uses_obsidian_vaults():
     import osm_init
+    from src import launcher
 
     entry = osm_init._native_entry(
         ["/path/a", "/path/b"], "postgresql://localhost/obsidian_brain"
     )
 
-    assert entry["env"]["OBSIDIAN_VAULTS"] == "/path/a,/path/b"
-    assert "OBSIDIAN_VAULT" not in entry["env"]
+    assert entry["env"] == {}
+    launcher.write_native_runtime(["/path/a", "/path/b"], "postgresql://localhost/obsidian_brain")
+    env = json.loads((launcher.OSM_CONFIG_DIR / "native_runtime.json").read_text())["env"]
+    assert env["OBSIDIAN_VAULTS"] == "/path/a,/path/b"
+    assert "OBSIDIAN_VAULT" not in env
 
 
 def test_native_entry_single_vault_uses_obsidian_vault():
     import osm_init
+    from src import launcher
 
     entry = osm_init._native_entry(["/path/a"], "postgresql://localhost/obsidian_brain")
 
-    assert entry["env"]["OBSIDIAN_VAULT"] == "/path/a"
-    assert "OBSIDIAN_VAULTS" not in entry["env"]
+    assert entry["env"] == {}
+    launcher.write_native_runtime(["/path/a"], "postgresql://localhost/obsidian_brain")
+    env = json.loads((launcher.OSM_CONFIG_DIR / "native_runtime.json").read_text())["env"]
+    assert env["OBSIDIAN_VAULT"] == "/path/a"
+    assert "OBSIDIAN_VAULTS" not in env
+
+
+def test_native_runtime_skips_recorded_docker_root(monkeypatch):
+    from src import launcher
+    launcher.write_native_runtime(["/synthetic/vault"], "postgresql://localhost/synthetic")
+    monkeypatch.setattr(os, "environ", {})
+    with patch.object(launcher, "_project_root", side_effect=AssertionError("must not inspect checkout")), patch.object(launcher, "_run_server") as server:
+        launcher.main()
+        server.assert_called_once()
+
+
+def test_explicit_native_mode_without_private_runtime_loads_project_dotenv(monkeypatch, tmp_path):
+    from src import launcher
+    (tmp_path / ".env").write_text(
+        "OBSIDIAN_VAULT=/legacy/vault\nDATABASE_URL=postgresql://localhost/legacy\n"
+    )
+    monkeypatch.setattr(os, "environ", {"OSM_DOCKER": "0"})
+    with patch.object(launcher, "_project_root", return_value=tmp_path), patch.object(launcher, "_run_server") as server:
+        launcher.main()
+        server.assert_called_once()
+    assert os.environ["OBSIDIAN_VAULT"] == "/legacy/vault"
+    assert os.environ["DATABASE_URL"] == "postgresql://localhost/legacy"
+
+
+def test_private_native_runtime_excludes_discovered_docker_dotenv(monkeypatch, tmp_path):
+    from src import launcher
+    launcher.write_native_runtime(["/native/vault"], "postgresql://localhost/native")
+    (tmp_path / ".env").write_text("OLLAMA_URL=http://synthetic-docker.invalid:11434\n")
+    monkeypatch.setattr(os, "environ", {})
+    with patch.object(launcher, "_project_root", return_value=tmp_path) as root, patch.object(launcher, "_run_server") as server:
+        launcher.main()
+        root.assert_not_called()
+        server.assert_called_once()
+    assert "OLLAMA_URL" not in os.environ
+
+
+def test_explicit_environment_wins_over_private_runtime(monkeypatch):
+    from src import launcher
+    launcher.write_native_runtime(["/file/vault"], "postgresql://localhost/file")
+    monkeypatch.setattr(os, "environ", {"OBSIDIAN_VAULT": "/explicit/vault", "DATABASE_URL": "postgresql://localhost/explicit", "OSM_DOCKER": "1"})
+    launcher._load_native_runtime()
+    assert os.environ == {"OBSIDIAN_VAULT": "/explicit/vault", "DATABASE_URL": "postgresql://localhost/explicit", "OSM_DOCKER": "1"}
+
+
+def test_missing_native_runtime_is_optional(monkeypatch):
+    from src import launcher
+    monkeypatch.setattr(os, "environ", {"OBSIDIAN_VAULT": "/explicit/vault"})
+    launcher._load_native_runtime()
+    assert os.environ == {"OBSIDIAN_VAULT": "/explicit/vault"}
+
+
+@pytest.mark.parametrize("payload", ["{invalid", "[]", '{"version":1,"env":{"DATABASE_URL":"synthetic-private"}}', '{"version":1,"env":{"PYTHONPATH":"synthetic-private"}}'])
+def test_invalid_private_runtime_fails_safely_without_overwriting(monkeypatch, capsys, payload):
+    from src import launcher
+    launcher.OSM_CONFIG_DIR.mkdir(exist_ok=True)
+    path = launcher.OSM_CONFIG_DIR / "native_runtime.json"
+    path.write_text(payload)
+    path.chmod(0o600)
+    with pytest.raises(SystemExit):
+        launcher.main()
+    assert "synthetic-private" not in capsys.readouterr().err
+    with pytest.raises(ValueError):
+        launcher.write_native_runtime(["/vault"], "postgresql://localhost/db")
+    assert path.read_text() == payload
+
+
+@pytest.mark.parametrize("unsafe", ["mode", "symlink", "hardlink"])
+def test_private_runtime_rejects_unsafe_file(monkeypatch, tmp_path, unsafe):
+    from src import launcher
+    launcher.write_native_runtime(["/vault"], "postgresql://localhost/db")
+    path = launcher.OSM_CONFIG_DIR / "native_runtime.json"
+    if unsafe == "mode":
+        path.chmod(0o644)
+    elif unsafe == "hardlink":
+        os.link(path, tmp_path / "second-link")
+    else:
+        original = tmp_path / "original.json"
+        path.rename(original)
+        path.symlink_to(original)
+    with pytest.raises(ValueError):
+        launcher._load_native_runtime()
+
+
+def test_docker_entry_overrides_retained_native_runtime(monkeypatch, tmp_path):
+    import osm_init
+    from src import launcher
+    launcher.write_native_runtime(["/native/vault"], "postgresql://localhost/native")
+    monkeypatch.setattr(os, "environ", osm_init._docker_entry()["env"])
+    with patch.object(launcher, "_project_root", return_value=tmp_path), patch.object(launcher, "_docker_info_ok", return_value=True), patch.object(launcher, "_container_id", return_value="synthetic-container"), patch.object(launcher, "_exec_into_container") as execute, patch.object(launcher, "_run_server") as server:
+        launcher.main()
+        execute.assert_called_once_with(tmp_path)
+        server.assert_not_called()
+
+
+def test_explicit_docker_mode_uses_project_env_without_native_hydration(monkeypatch, tmp_path):
+    from src import launcher
+    launcher.write_native_runtime(["/native/vault"], "postgresql://localhost/native")
+    (tmp_path / ".env").write_text(
+        "OBSIDIAN_VAULT=/docker/vault\nDATABASE_URL=postgresql://localhost/docker\n"
+    )
+    monkeypatch.setattr(os, "environ", {"OSM_DOCKER": "1", "OSM_DOCKER_WAIT": "0"})
+    with patch.object(launcher, "_project_root", return_value=tmp_path), patch.object(launcher, "_run_server") as server:
+        launcher.main()
+        server.assert_called_once()
+    assert os.environ["OBSIDIAN_VAULT"] == "/docker/vault"
+    assert os.environ["DATABASE_URL"] == "postgresql://localhost/docker"
+
+
+def test_explicit_docker_mode_does_not_read_invalid_native_runtime(monkeypatch):
+    from src import launcher
+    (launcher.OSM_CONFIG_DIR / "native_runtime.json").write_text("malformed")
+    monkeypatch.setattr(os, "environ", {"OSM_DOCKER": "1"})
+    launcher._load_native_runtime()
+    assert os.environ == {"OSM_DOCKER": "1"}
+
+
+def test_native_runtime_remove_preserves_unrelated_configuration():
+    from src import launcher
+    launcher.write_native_runtime(["/vault"], "postgresql://localhost/db")
+    unrelated = launcher.OSM_CONFIG_DIR / "unrelated.json"
+    unrelated.write_text("unchanged")
+    launcher.remove_native_runtime()
+    assert not (launcher.OSM_CONFIG_DIR / "native_runtime.json").exists()
+    assert unrelated.read_text() == "unchanged"
 
 
 def test_docker_wait_zero_skips_polling(tmp_path, monkeypatch):
