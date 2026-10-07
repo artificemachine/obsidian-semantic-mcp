@@ -453,3 +453,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 2026-10-07: docs(mcp): record merged 0.19.0 installation and reproduced validation; distinguish unverified Desktop UI acceptance and owner-deferred Langfuse.
 
 - 2026-10-07: feat(setup): persist native retrieval settings without credentials, retain legacy runtime compatibility and validate effective retrieval configuration before launch.
+- 2026-10-07: docs: record the Caasiopeia live-check plan and the Obsidian desktop CLI unavailability report with its URI fallback.
