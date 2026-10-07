@@ -1,11 +1,14 @@
 """Native retrieval settings stay private to the installed OSM runtime."""
 import json
 import os
+import subprocess
 import sys
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 import pytest
 import requests
@@ -14,19 +17,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 SOURCE_ID = "12345678-1234-5678-1234-567812345678"
-API_KEY = "synthetic-secret-for-runtime-test"
+API_KEY = f"synthetic-runtime-{uuid.uuid4()}"
+_ALLOWED_LOOPBACK_PORTS = set()
 
 
 @pytest.fixture(autouse=True)
 def block_unplanned_http(monkeypatch):
     request = requests.Session.request
+    _ALLOWED_LOOPBACK_PORTS.clear()
 
     def unexpected_request(self, method, url, *args, **kwargs):
-        if urlsplit(url).hostname in ("127.0.0.1", "localhost", "::1"):
+        parts = urlsplit(url)
+        if parts.hostname == "127.0.0.1" and parts.port in _ALLOWED_LOOPBACK_PORTS:
             return request(self, method, url, *args, **kwargs)
-        pytest.fail(f"unexpected HTTP request to {urlsplit(url).hostname or '<invalid-host>'}")
+        pytest.fail(f"unexpected HTTP request to {parts.hostname or '<invalid-host>'}")
 
-    from urllib.parse import urlsplit
     monkeypatch.setattr(requests.Session, "request", unexpected_request)
 
 
@@ -296,6 +301,7 @@ def test_caas_setup_preflight_uses_scoped_public_query_loopback_only(monkeypatch
             pass
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
+    _ALLOWED_LOOPBACK_PORTS.add(server.server_port)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -315,6 +321,7 @@ def test_caas_setup_preflight_uses_scoped_public_query_loopback_only(monkeypatch
         server.shutdown()
         thread.join(timeout=2)
         server.server_close()
+        _ALLOWED_LOOPBACK_PORTS.discard(server.server_port)
 
     path, authorization, payload = received[0]
     assert path == "/v1/context"
@@ -715,6 +722,295 @@ def test_remote_vault_preflight_failure_happens_before_mount(monkeypatch, tmp_pa
         )
     assert not mount.exists()
     assert osm_init._REMOTE_VAULT_SELECTION == ("/notes/vault", str(mount))
+
+
+def _saved_docker_caas_env(path):
+    path.write_text(
+        "OBSIDIAN_VAULT=/synthetic/Research\n"
+        "POSTGRES_PASSWORD=synthetic-db-password\n"
+        "OSM_RETRIEVAL_BACKEND=caasiopeia\n"
+        "CAASIOPEIA_BASE_URL=http://host.docker.internal:8123\n"
+        "OSM_CAASIOPEIA_HOST_URL=http://localhost:8123\n"
+        f"CAASIOPEIA_SOURCE_MAP=vault={SOURCE_ID}\n"
+        "CAASIOPEIA_SOURCE_ROOTS=vault=notes\n"
+        "CAASIOPEIA_TOKEN_BUDGET=900\n"
+        "OWNER_SETTING=keep\n"
+    )
+
+
+def test_rebuild_preserves_saved_backend(monkeypatch, tmp_path):
+    import osm_init
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    _saved_docker_caas_env(deploy / ".env")
+    monkeypatch.setattr(osm_init, "PROJECT_ROOT", deploy)
+    monkeypatch.setattr(osm_init, "_RETRIEVAL_SETTINGS", None)
+    monkeypatch.setattr(osm_init.os, "environ", {"CAASIOPEIA_API_KEY": API_KEY})
+    compose_calls = []
+    monkeypatch.setattr(osm_init, "compose", lambda args, **kwargs: compose_calls.append((args, kwargs)))
+    monkeypatch.setattr(osm_init, "info", lambda *args: None)
+    monkeypatch.setattr(osm_init, "warn", lambda *args: None)
+
+    osm_init._build_or_pull_custom_services()
+
+    args, kwargs = compose_calls[-1]
+    assert args == ["up", "-d", "--build", "mcp-server", "dashboard"]
+    env = kwargs["env"]
+    assert env["OSM_RETRIEVAL_BACKEND"] == "caasiopeia"
+    assert env["CAASIOPEIA_BASE_URL"] == "http://host.docker.internal:8123"
+    assert env["CAASIOPEIA_SOURCE_MAP"] == f"vault={SOURCE_ID}"
+    assert env["CAASIOPEIA_SOURCE_ROOTS"] == "vault=notes"
+    assert env["CAASIOPEIA_API_KEY"] == API_KEY
+    assert "API_KEY" not in (deploy / ".env").read_text()
+    assert (deploy / ".env").read_text().find("OSM_CAASIOPEIA_HOST_URL=http://localhost:8123") >= 0
+
+
+@pytest.mark.parametrize("command", ["rebuild", "update"])
+def test_rebuild_missing_caas_key_stops_before_changes(monkeypatch, tmp_path, command):
+    import osm_init
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    _saved_docker_caas_env(deploy / ".env")
+    original = (deploy / ".env").read_bytes()
+    monkeypatch.setattr(osm_init, "PROJECT_ROOT", deploy)
+    monkeypatch.setattr(osm_init, "_RETRIEVAL_SETTINGS", None)
+    monkeypatch.setattr(osm_init.os, "environ", {})
+    monkeypatch.setattr(osm_init, "_fetch_latest_release_tag", lambda: None)
+    changes = []
+    monkeypatch.setattr(osm_init, "compose", lambda *args, **kwargs: changes.append("compose"))
+    monkeypatch.setattr(osm_init, "_update_env_var", lambda *args, **kwargs: changes.append("version"))
+    monkeypatch.setattr(osm_init, "run", lambda *args, **kwargs: changes.append("build"))
+
+    with pytest.raises(SystemExit):
+        getattr(osm_init, f"cmd_{command}")()
+
+    assert changes == []
+    assert (deploy / ".env").read_bytes() == original
+
+
+def test_rebuild_local_scrubs_stale_caas_compose_environment(monkeypatch, tmp_path):
+    import osm_init
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    _saved_docker_caas_env(deploy / ".env")
+    monkeypatch.setattr(osm_init, "PROJECT_ROOT", deploy)
+    monkeypatch.setattr(osm_init, "_RETRIEVAL_SETTINGS", None)
+    monkeypatch.setattr(osm_init.os, "environ", {"CAASIOPEIA_API_KEY": API_KEY})
+    monkeypatch.setattr(osm_init, "_update_env_var", lambda *args, **kwargs: None)
+    monkeypatch.setattr(osm_init, "_compose_image_name", lambda service: f"test/{service}")
+    monkeypatch.setattr(osm_init, "run", lambda *args, **kwargs: None)
+    compose_calls = []
+    monkeypatch.setattr(osm_init, "compose", lambda args, **kwargs: compose_calls.append(kwargs))
+    monkeypatch.setattr(osm_init, "info", lambda *args: None)
+    monkeypatch.setattr(osm_init, "warn", lambda *args: None)
+    monkeypatch.setattr(osm_init, "PROJECT_ROOT", deploy)
+    (deploy / "Dockerfile").touch()
+    (deploy / "Dockerfile.dashboard").touch()
+    saved = osm_init._read_env()
+    saved["OSM_RETRIEVAL_BACKEND"] = "local"
+    osm_init._update_env_var("OSM_RETRIEVAL_BACKEND", "local")
+    monkeypatch.setattr(osm_init, "_read_env", lambda: saved)
+
+    osm_init._build_or_pull_custom_services()
+
+    env = compose_calls[-1]["env"]
+    assert env["OSM_RETRIEVAL_BACKEND"] == "local"
+    assert env["CAASIOPEIA_API_KEY"] == ""
+    assert env["CAASIOPEIA_BASE_URL"] == ""
+    assert env["CAASIOPEIA_SOURCE_MAP"] == ""
+
+
+@pytest.mark.parametrize("bad_container_url", [
+    "http://user:password@host:8123",
+    "http://host:8123/v1",
+    "http://host:8123?token=secret",
+    "http://host:bad-port",
+])
+def test_rebuild_rejects_unsafe_saved_container_url_before_compose(
+    monkeypatch, tmp_path, bad_container_url
+):
+    import osm_init
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    _saved_docker_caas_env(deploy / ".env")
+    env_path = deploy / ".env"
+    env_path.write_text(env_path.read_text().replace(
+        "http://host.docker.internal:8123", bad_container_url
+    ))
+    original = env_path.read_bytes()
+    monkeypatch.setattr(osm_init, "PROJECT_ROOT", deploy)
+    monkeypatch.setattr(osm_init, "_RETRIEVAL_SETTINGS", None)
+    monkeypatch.setattr(osm_init.os, "environ", {"CAASIOPEIA_API_KEY": API_KEY})
+    calls = []
+    monkeypatch.setattr(osm_init, "compose", lambda *args, **kwargs: calls.append("compose"))
+    with pytest.raises(SystemExit):
+        osm_init._build_or_pull_custom_services()
+    assert calls == []
+    assert env_path.read_bytes() == original
+
+
+def test_remove_clears_owned_retrieval_settings(monkeypatch, tmp_path):
+    import osm_init
+    from src import launcher
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    env_path = deploy / ".env"
+    env_path.write_text(
+        "OBSIDIAN_VAULT=/synthetic/vault\n"
+        "OSM_RETRIEVAL_BACKEND=caasiopeia\n"
+        f"CAASIOPEIA_SOURCE_MAP=vault={SOURCE_ID}\n"
+        "OWNER_SETTING=keep\n"
+    )
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    unrelated = config_dir / "unrelated.json"
+    unrelated.write_text('{"keep": true}\n')
+    monkeypatch.setattr(osm_init, "PROJECT_ROOT", deploy)
+    monkeypatch.setattr(osm_init, "OSM_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(launcher, "OSM_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(osm_init, "_PARAMS", {"yes": "y"})
+    monkeypatch.setattr(osm_init, "DRY_RUN", False)
+    monkeypatch.setattr(osm_init, "run", lambda *args, **kwargs: type("Result", (), {"stdout": "", "returncode": 0})())
+    monkeypatch.setattr(osm_init, "_remove_named_volumes_from_override", lambda: None)
+    monkeypatch.setattr(osm_init, "_claude_cfg_path", lambda: None)
+    monkeypatch.setattr(osm_init, "remove_opencode_config", lambda: None)
+    monkeypatch.setattr(osm_init, "remove_codex_config", lambda: None)
+    monkeypatch.setattr(osm_init, "cmd_exists", lambda name: False)
+    monkeypatch.setattr(osm_init, "_osm_launcher_path", lambda: tmp_path / "missing-osm")
+
+    osm_init.cmd_remove()
+
+    assert env_path.read_text() == "OWNER_SETTING=keep\n"
+    assert unrelated.read_text() == '{"keep": true}\n'
+
+
+def test_installed_setup_independent_of_checkout(tmp_path):
+    repo = Path(__file__).resolve().parent.parent
+    wheel_dir = tmp_path / "wheel"
+    wheel_dir.mkdir()
+    build = subprocess.run(
+        ["uv", "build", "--offline", "--wheel", "--out-dir", str(wheel_dir)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    wheels = list(wheel_dir.glob("*.whl"))
+    assert len(wheels) == 1
+
+    venv = tmp_path / "venv"
+    make_venv = subprocess.run(
+        ["uv", "venv", "--offline", "--python", sys.executable,
+         str(venv)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    assert make_venv.returncode == 0, make_venv.stderr
+    python = venv / "bin" / "python"
+    install = subprocess.run(
+        ["uv", "pip", "install", "--offline", "--python", str(python), str(wheels[0])],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    assert install.returncode == 0, install.stderr
+
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / ".env").write_text(
+        "OBSIDIAN_VAULT=/synthetic/Research\n"
+        "OSM_RETRIEVAL_BACKEND=caasiopeia\n"
+        "CAASIOPEIA_BASE_URL=http://host.docker.internal:8123\n"
+        "OSM_CAASIOPEIA_HOST_URL=http://localhost:8123\n"
+        f"CAASIOPEIA_SOURCE_MAP=vault={SOURCE_ID}\n"
+        "CAASIOPEIA_SOURCE_ROOTS=vault=notes\n"
+        "CAASIOPEIA_TOKEN_BUDGET=900\n"
+    )
+    output_home = tmp_path / "home"
+    output_home.mkdir()
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(output_home),
+           "CAASIOPEIA_API_KEY": API_KEY,
+           "DATABASE_URL": "postgresql://osm:unused@127.0.0.1:1/unused",
+           "OBSIDIAN_VAULT": "/synthetic/Research",
+           "OSM_TEST_DEPLOY": str(deploy)}
+    code = (
+        "import json, osm_init, src.server, src.launcher; from pathlib import Path; "
+        "osm_init.PROJECT_ROOT = Path(__import__('os').environ['OSM_TEST_DEPLOY']); "
+        "resolved = osm_init._prepare_saved_retrieval_for_rebuild(); "
+        "print(json.dumps({'module': str(Path(osm_init.__file__).resolve()), "
+        "'server': str(Path(src.server.__file__).resolve()), "
+        "'launcher': str(Path(src.launcher.__file__).resolve()), "
+        "'backend': resolved['OSM_RETRIEVAL_BACKEND'], "
+        "'url': resolved['CAASIOPEIA_BASE_URL'], "
+        "'source_map': resolved['CAASIOPEIA_SOURCE_MAP']}))"
+    )
+    run = subprocess.run(
+        [str(python), "-c", code],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    result = json.loads(run.stdout.strip().splitlines()[-1])
+    for name in ("module", "server", "launcher"):
+        assert Path(result[name]).is_relative_to(venv)
+        assert str(repo) not in result[name]
+    assert result["backend"] == "caasiopeia"
+    assert result["url"] == "http://host.docker.internal:8123"
+    assert result["source_map"] == f"vault={SOURCE_ID}"
+    assert API_KEY not in run.stdout + run.stderr + (deploy / ".env").read_text()
+
+    native_settings = _retrieval_settings("Research")
+    write_native = (
+        "import src.launcher; from pathlib import Path; "
+        f"src.launcher.write_native_runtime(['/synthetic/Research'], "
+        "'postgresql://osm:unused@127.0.0.1:1/unused', retrieval_settings="
+        f"{native_settings!r})"
+    )
+    saved = subprocess.run(
+        [str(python), "-c", write_native], cwd=tmp_path, env=env,
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    assert saved.returncode == 0, saved.stderr
+    runtime = output_home / ".config" / "obsidian-semantic-mcp" / "native_runtime.json"
+    assert API_KEY not in runtime.read_text()
+    restart = subprocess.run(
+        [str(python), "-c",
+         "import json, os, src.launcher; "
+         "src.launcher._run_server = lambda: None; src.launcher.main(); "
+         "print(json.dumps({k: os.environ[k] for k in ('OSM_RETRIEVAL_BACKEND', "
+         "'CAASIOPEIA_BASE_URL', 'CAASIOPEIA_SOURCE_MAP', 'CAASIOPEIA_SOURCE_ROOTS')}))"],
+        cwd=tmp_path,
+        env={key: value for key, value in env.items() if key != "OSM_TEST_DEPLOY"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert restart.returncode == 0, restart.stderr
+    restored = json.loads(restart.stdout.strip().splitlines()[-1])
+    assert restored == {
+        "OSM_RETRIEVAL_BACKEND": "caasiopeia",
+        "CAASIOPEIA_BASE_URL": "http://caas.invalid:8080",
+        "CAASIOPEIA_SOURCE_MAP": f"Research={SOURCE_ID}",
+        "CAASIOPEIA_SOURCE_ROOTS": "Research=notes",
+    }
+    assert API_KEY not in restart.stdout + restart.stderr
 
 
 def test_remote_vault_is_mounted_only_after_preflight(monkeypatch, tmp_path):

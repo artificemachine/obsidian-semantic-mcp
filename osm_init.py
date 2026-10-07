@@ -115,6 +115,14 @@ _CAAS_RETRIEVAL_ENV = (
     "CAASIOPEIA_TOKEN_BUDGET",
 )
 _CAAS_SAVED_ENV = _CAAS_RETRIEVAL_ENV + ("OSM_CAASIOPEIA_HOST_URL",)
+_OSM_ENV_KEYS = frozenset(
+    {
+        "OBSIDIAN_VAULTS", "OBSIDIAN_VAULT", "POSTGRES_PASSWORD", "OLLAMA_URL",
+        "DASHBOARD_TOKEN", "PGDATA_PATH", "OLLAMA_DATA_PATH", "COMPOSE_PROFILES",
+        "OSM_VERSION", "OSM_SSH_USER", "OSM_SSH_HOST", "OSM_SSH_REMOTE_PORT",
+        "OSM_SSH_LOCAL_PORT", "OSM_SSH_KEY", *_CAAS_SAVED_ENV,
+    }
+)
 _DRY_ACTIONS: list[str] = []  # collects every skipped action for the summary
 
 
@@ -2564,7 +2572,7 @@ def _compose_image_name(service: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _build_or_pull_custom_services(pull_base: bool = False) -> None:
+def _build_or_pull_custom_services(pull_base: bool = False, retrieval_env=None) -> None:
     """Refresh mcp-server/dashboard. If a local source checkout is present
     (Dockerfile + Dockerfile.dashboard at PROJECT_ROOT), build directly with
     `docker build` and persist OSM_VERSION=APP_VERSION to .env so the tag
@@ -2578,6 +2586,8 @@ def _build_or_pull_custom_services(pull_base: bool = False) -> None:
     is refreshed too (used by `osm update`, which is expected to fetch
     upstream changes, not just retag the same base).
     """
+    if retrieval_env is None:
+        retrieval_env = _prepare_saved_retrieval_for_rebuild()
     dockerfile = PROJECT_ROOT / "Dockerfile"
     dockerfile_dashboard = PROJECT_ROOT / "Dockerfile.dashboard"
 
@@ -2585,22 +2595,24 @@ def _build_or_pull_custom_services(pull_base: bool = False) -> None:
         mcp_repo = _compose_image_name("mcp-server")
         dashboard_repo = _compose_image_name("dashboard")
         if mcp_repo and dashboard_repo:
-            _update_env_var("OSM_VERSION", APP_VERSION)
             mcp_image = f"{mcp_repo}:{APP_VERSION}"
             dashboard_image = f"{dashboard_repo}:{APP_VERSION}"
             info(f"Building from local source ({PROJECT_ROOT}) — tag {APP_VERSION}")
             build_prefix = ["docker", "build"] + (["--pull"] if pull_base else [])
-            run(build_prefix + ["-f", str(dockerfile), "-t", mcp_image, str(PROJECT_ROOT)])
-            run(build_prefix + ["-f", str(dockerfile_dashboard), "-t", dashboard_image, str(PROJECT_ROOT)])
+            build_env = dict(retrieval_env)
+            build_env["CAASIOPEIA_API_KEY"] = ""
+            run(build_prefix + ["-f", str(dockerfile), "-t", mcp_image, str(PROJECT_ROOT)], env=build_env)
+            run(build_prefix + ["-f", str(dockerfile_dashboard), "-t", dashboard_image, str(PROJECT_ROOT)], env=build_env)
+            _update_env_var("OSM_VERSION", APP_VERSION)
             # Images now match the tag docker-compose.yml resolves to, so a plain
             # `up -d` uses them as-is (Compose's default pull policy only pulls
             # when the tag is missing locally) — no risk of clobbering with a stale pull.
-            compose(["up", "-d", "mcp-server", "dashboard"])
+            compose(["up", "-d", "mcp-server", "dashboard"], env=retrieval_env)
             return
         warn("Could not resolve image names from docker-compose.yml — falling back to compose --build")
 
     warn("No local Dockerfile found — recreating from the already-pulled image, not a source rebuild")
-    compose(["up", "-d", "--build", "mcp-server", "dashboard"])
+    compose(["up", "-d", "--build", "mcp-server", "dashboard"], env=retrieval_env)
 
 
 def cmd_rebuild():
@@ -2770,6 +2782,7 @@ def cmd_update():
     header("Updating Obsidian Semantic MCP")
     hr()
 
+    retrieval_env = _prepare_saved_retrieval_for_rebuild()
     installed = APP_VERSION
     latest = _fetch_latest_release_tag()
     if latest:
@@ -2783,10 +2796,12 @@ def cmd_update():
     # local checkout is present (source installs), else falls back to
     # recreating from whatever's already pulled (pip-only/packaged installs).
     info("Pulling latest images for image-based services (postgres, ollama)…")
-    compose(["pull", "postgres", "ollama"])
+    pull_env = dict(retrieval_env)
+    pull_env["CAASIOPEIA_API_KEY"] = ""
+    compose(["pull", "postgres", "ollama"], env=pull_env)
 
     info("Rebuilding custom services from source with refreshed base images…")
-    _build_or_pull_custom_services(pull_base=True)
+    _build_or_pull_custom_services(pull_base=True, retrieval_env=retrieval_env)
 
     ok("Docker services updated")
     print()
@@ -2870,10 +2885,24 @@ def cmd_remove():
     header("Removing .env")
     env_path = PROJECT_ROOT / ".env"
     if DRY_RUN:
-        _dry(f"remove {env_path}")
+        _dry(f"remove OSM-owned settings from {env_path}")
     elif env_path.exists():
-        env_path.unlink()
-        ok(f"Deleted {env_path}")
+        existing = env_path.read_text(encoding="utf-8").splitlines()
+        preserved = [
+            line for line in existing
+            if not (
+                line.strip()
+                and not line.lstrip().startswith("#")
+                and line.split("=", 1)[0].strip() in _OSM_ENV_KEYS
+            )
+        ]
+        if preserved:
+            env_path.write_text("\n".join(preserved) + "\n", encoding="utf-8")
+            env_path.chmod(0o600)
+            ok(f"Removed OSM-owned settings from {env_path}")
+        else:
+            env_path.unlink()
+            ok(f"Deleted {env_path}")
     else:
         info(".env not found — skipping")
 
@@ -3028,6 +3057,85 @@ def _compose_retrieval_env(base_env=None):
         if _RETRIEVAL_SETTINGS.get("OSM_RETRIEVAL_BACKEND") == "caasiopeia":
             env["CAASIOPEIA_API_KEY"] = os.environ.get("CAASIOPEIA_API_KEY", "")
     return env
+
+
+def _prepare_saved_retrieval_for_rebuild():
+    """Load saved retrieval settings and validate credentials before Docker changes."""
+    global _RETRIEVAL_SETTINGS, _RETRIEVAL_BACKEND
+    try:
+        saved = _read_env()
+    except (OSError, ValueError, TypeError) as exc:
+        fail(f"Saved retrieval configuration is invalid ({type(exc).__name__})")
+        sys.exit(1)
+
+    backend = saved.get("OSM_RETRIEVAL_BACKEND", "local").strip().lower() or "local"
+    if backend not in ("local", "caasiopeia"):
+        fail("Saved retrieval configuration has invalid backend; choose local or caasiopeia")
+        sys.exit(1)
+    if backend == "local":
+        _RETRIEVAL_BACKEND = backend
+        _RETRIEVAL_SETTINGS = {"OSM_RETRIEVAL_BACKEND": backend}
+        return _compose_retrieval_env()
+
+    api_key = os.environ.get("CAASIOPEIA_API_KEY", "").strip()
+    if not api_key:
+        fail("CAASIOPEIA_API_KEY is required to rebuild a Caasiopeia installation")
+        sys.exit(1)
+
+    vaults = saved.get("OBSIDIAN_VAULTS", "").strip()
+    if vaults:
+        host_vault_paths = [item.strip() for item in vaults.split(",") if item.strip()]
+    else:
+        vault = saved.get("OBSIDIAN_VAULT", "").strip()
+        host_vault_paths = [vault] if vault else []
+    vault_paths = _container_vault_paths(host_vault_paths, "docker")
+    validation_env = dict(saved)
+    validation_env["CAASIOPEIA_BASE_URL"] = (
+        saved.get("OSM_CAASIOPEIA_HOST_URL", "").strip()
+        or saved.get("CAASIOPEIA_BASE_URL", "").strip()
+    )
+    validation_env["CAASIOPEIA_API_KEY"] = api_key
+    try:
+        container_url = saved.get("CAASIOPEIA_BASE_URL", "").strip()
+        for key, value in (
+            ("OSM_CAASIOPEIA_HOST_URL", validation_env["CAASIOPEIA_BASE_URL"]),
+            ("CAASIOPEIA_BASE_URL", container_url),
+        ):
+            parts = urllib.parse.urlsplit(value)
+            if (
+                parts.scheme not in ("http", "https")
+                or not parts.hostname
+                or parts.username is not None
+                or parts.password is not None
+                or parts.path not in ("", "/")
+                or parts.query
+                or parts.fragment
+                or any(ord(character) < 32 or ord(character) == 127 for character in value)
+                or "$" in value
+            ):
+                raise ValueError(f"unsafe {key}")
+            _ = parts.port
+        from src.config import load_caasiopeia_settings
+        settings = load_caasiopeia_settings(vault_paths, validation_env)
+    except (ValueError, RuntimeError) as exc:
+        fail(f"Saved Caasiopeia configuration is invalid ({type(exc).__name__})")
+        sys.exit(1)
+
+    _RETRIEVAL_BACKEND = backend
+    _RETRIEVAL_SETTINGS = {
+        "OSM_RETRIEVAL_BACKEND": backend,
+        "CAASIOPEIA_BASE_URL": saved.get("CAASIOPEIA_BASE_URL", "").strip(),
+        "CAASIOPEIA_SOURCE_MAP": ",".join(
+            f"{name}={source}" for name, source in settings.source_ids.items()
+        ),
+        "CAASIOPEIA_TOKEN_BUDGET": str(settings.token_budget),
+        "OSM_CAASIOPEIA_HOST_URL": validation_env["CAASIOPEIA_BASE_URL"],
+    }
+    if settings.source_roots:
+        _RETRIEVAL_SETTINGS["CAASIOPEIA_SOURCE_ROOTS"] = ",".join(
+            f"{name}={root}" for name, root in settings.source_roots.items()
+        )
+    return _compose_retrieval_env()
 
 
 def _prepare_retrieval_for_setup(interactive, mode, handler=None):

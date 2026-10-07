@@ -302,3 +302,11 @@ Owner explicitly requested GPT-6 Luna subagents for implementation. This superse
 ## Privacy clarification — 2026-10-07
 
 The new credential non-persistence requirement applies to CAASIOPEIA_API_KEY. Existing owner-only PostgreSQL/dashboard configuration and its established installation contract remain unchanged; this plan does not migrate unrelated credential storage. Local child environments override saved Caasiopeia fields with empty values where required to defeat Docker Compose .env interpolation.
+
+## Build outcome — 2026-10-07
+
+All three implementation slices are complete on the feature branch. Native runtime persistence remains version-1 compatible; every setup mode offers local or Caasiopeia with preflight before provisioning; Docker rebuild/update preserve the selected backend and reject missing runtime credentials before changes. Removal preserves unowned environment lines. The API key remains environment-only.
+
+Evidence: final prescribed suite 283 passed; independent full suite 685 passed, 31 skipped, src coverage 67.37% (50% configured floor); SAST zero findings. Installed-wheel imports, native subprocess restart and synthetic MCP search workflows were reproduced outside the checkout. External provisioning, database/indexing and local ranking are simulated in those workflows; they do not prove fresh live infrastructure installation. Earlier interrupted runs exposed and corrected pre-existing setup-fixture isolation gaps and are not passing evidence.
+
+Delivery remains pending the mandatory commit hook, VM740 secret scan, PR CI, merge, authorized tag and installed validation. See PLAN-retrieval-backend-choice.execution.md for exact checkpoints and artifact evidence.

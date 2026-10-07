@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+- 2026-10-07: feat(setup): preserve the saved retrieval backend across Docker rebuild/update, reject missing Caasiopeia credentials before deployment changes, and retain unrelated environment settings during removal. Version 0.20.0 adds installed-wheel regression coverage for both retrieval backends.
+
 - 2026-10-07: feat(setup): offer explicit local or Caasiopeia retrieval selection in every setup mode; validate connectivity before provisioning, preserve non-secret settings, and keep the Caasiopeia API key environment-only.
 
 - 2026-10-07: feat(cli): add `osm open --vault` for existing Markdown desktop tabs through encoded Obsidian URIs, with explicit `--base`, batch path validation, containment checks, content hashes, dry-run, and native macOS/Linux/Windows dispatch. The optional desktop CLI is not required; dispatch success is reported separately from tab selection.
