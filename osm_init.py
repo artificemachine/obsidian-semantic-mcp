@@ -14,6 +14,8 @@ Or via the scripts/osm wrapper:
 from __future__ import annotations
 
 import io
+import argparse
+import hashlib
 import json
 import os
 import platform
@@ -2901,11 +2903,90 @@ def cmd_dashboard():
 _INSTALL_URL = f"https://raw.githubusercontent.com/{_GITHUB_REPO}/main/install.sh"
 
 
+def _desktop_uri_command(uri):
+    """Return an argument list for the native URI handler."""
+    system = platform.system()
+    if system == "Darwin":
+        handler = shutil.which("open")
+        app = Path("/Applications/Obsidian.app")
+        if not handler or not app.is_dir():
+            raise ValueError("Obsidian.app and the macOS open command are required")
+        return [handler, "-a", str(app), uri]
+    if system == "Linux":
+        handler = shutil.which("xdg-open")
+        if not handler:
+            raise ValueError("xdg-open is required; register Obsidian as the obsidian URI handler")
+        return [handler, uri]
+    if system == "Windows" and hasattr(os, "startfile"):
+        return None
+    raise ValueError(f"Desktop note opening is unsupported on {system}")
+
+
+def cmd_open(argv=None):
+    """Dispatch existing Markdown notes to Obsidian without creating content."""
+    parser = argparse.ArgumentParser(prog="osm open", description="Open existing Markdown notes as Obsidian desktop tabs")
+    parser.add_argument("--vault", required=True, help="Absolute path to the local Obsidian vault")
+    parser.add_argument("--base", default=".", help="Explicit note base directory within the vault (default: vault root)")
+    parser.add_argument("--dry-run", action="store_true", help="Validate and print URIs without launching")
+    parser.add_argument("paths", nargs="+", help="Exact existing note paths; use -- before names starting with -")
+    args = parser.parse_args(sys.argv[2:] if argv is None else argv)
+    try:
+        vault_arg = Path(args.vault).expanduser()
+        if not vault_arg.is_absolute():
+            raise ValueError("--vault must be an absolute path")
+        vault = vault_arg.resolve(strict=True)
+        if not vault.is_dir() or not (vault / ".obsidian").is_dir():
+            raise ValueError(f"Not an Obsidian vault: {vault}")
+        base = (vault / Path(args.base).expanduser()).resolve(strict=True)
+        if not base.is_dir() or not base.is_relative_to(vault):
+            raise ValueError("--base must be a directory inside the vault")
+        targets = []
+        for supplied in args.paths:
+            path = (base / Path(supplied).expanduser()).resolve(strict=True)
+            if not path.is_relative_to(vault):
+                raise ValueError(f"Note is outside the vault: {supplied}")
+            if not path.is_file() or path.suffix.lower() != ".md":
+                raise ValueError(f"Not a regular Markdown note: {supplied}")
+            if "#" in str(path):
+                raise ValueError(f"Cannot safely open a path containing a heading delimiter (#): {supplied}")
+            uri = "obsidian://open?" + urllib.parse.urlencode(
+                {"path": str(path), "paneType": "tab"}, quote_via=urllib.parse.quote, safe=""
+            )
+            targets.append((path, hashlib.sha256(path.read_bytes()).digest(), uri))
+        commands = [_desktop_uri_command(uri) for _, _, uri in targets]
+        if args.dry_run:
+            for _, _, uri in targets:
+                info(f"[dry-run] {uri}")
+            return
+        dispatched = 0
+        try:
+            for (path, digest, uri), command in zip(targets, commands):
+                if hashlib.sha256(path.read_bytes()).digest() != digest:
+                    raise ValueError(f"Note changed after validation: {path}")
+                if command is None:
+                    os.startfile(uri)
+                else:
+                    subprocess.run(command, check=True, timeout=10)
+                dispatched += 1
+            for path, digest, _ in targets:
+                if hashlib.sha256(path.read_bytes()).digest() != digest:
+                    raise ValueError(f"Note changed during opening: {path}")
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            fail(f"Desktop dispatch failed after {dispatched} of {len(targets)} requests: {exc}")
+            raise SystemExit(1) from exc
+        ok(f"Dispatched {dispatched} desktop opening requests; note bytes unchanged")
+        info("Verify tab selection in Obsidian; URI dispatch alone does not prove the tabs opened")
+    except (OSError, ValueError, RuntimeError) as exc:
+        fail(f"Cannot open notes: {exc}")
+        raise SystemExit(1) from exc
+
+
 def cmd_help():
     print(f"\n  {_c('1', f'osm v{APP_VERSION}')} — Obsidian Semantic MCP CLI\n")
     print(f"  {_c('1', 'Install (one-liner):')}\n")
     print(f"    curl -fsSL {_INSTALL_URL} | bash\n")
     print(f"  {_c('1', 'Usage:')}  osm <command> [flags]\n")
+    print("    osm open --vault <absolute-path> [--base <directory>] [--dry-run] <note> ...\n")
     print(f"  {_c('1', 'Commands:')}\n")
     for name, (_, desc) in COMMANDS.items():
         print(f"    {_c('1', f'osm {name:<10}')}  {desc}")
@@ -2986,6 +3067,7 @@ COMMANDS = {
     "status": (cmd_status, "Check service health"),
     "vaults": (cmd_vaults, "List configured Obsidian vault(s)"),
     "dashboard": (cmd_dashboard, "Open monitoring dashboard in browser"),
+    "open": (cmd_open, "Open existing Markdown notes as Obsidian desktop tabs"),
     "tunnel": (cmd_tunnel, "Reconnect SSH tunnel to remote Ollama host"),
     "rebuild": (cmd_rebuild, "Rebuild Docker images and restart"),
     "update": (cmd_update, "Pull latest Docker images and restart services"),
@@ -3067,6 +3149,10 @@ def _parse_flags(args):
 
 def main():
     global DRY_RUN, _PARAMS
+
+    if len(sys.argv) > 1 and sys.argv[1] == "open":
+        cmd_open(sys.argv[2:])
+        return
 
     args, _PARAMS = _parse_flags(sys.argv[1:])
 
