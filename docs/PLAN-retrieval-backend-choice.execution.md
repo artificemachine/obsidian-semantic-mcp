@@ -1,5 +1,9 @@
 # Retrieval backend choice execution checkpoints
 
+- CI fixture correction: locked offline dependency synchronization targets a fresh temporary environment with no project install; the built wheel is then installed without dependency resolution. A one-time preparatory sync populated missing platform wheels locally; test execution has no online fallback. Worker artifact checks passed (2 in 17.85s), independent review passed (2 in 20.77s), and parent reproduced both workflows. SAST remains zero findings. CI must pass again on the corrected head before merge.
+
+- PR 79 was opened after VM740 gitleaks scanned all three branch commits with no leaks and verified the remote head fe936356db4f8fc9773aa3e88cbea44fc1a5c333. CI run 37642656222 failed: two offline artifact installers required uncached registry metadata (httpx); 703 tests passed, 11 skipped. Merge remains blocked. GPT-6 Luna is correcting the fixture installers to synchronize locked dependencies into temporary environments before installing the built wheel without dependency resolution; no online fallback or skipped test is accepted.
+
 - Parent final full-suite coverage run passed: 685 passed, 31 skipped in 114.91s; src coverage 67.37%, above the unchanged configured 50% floor. Final code is frozen; mandatory commit hook, VM740 gitleaks, PR CI, merge, tag and installation validation remain separate delivery gates.
 
 - Final iteration 3 prescribed suite passed on frozen source: 283 passed in 46.65s under GNU timeout (600s). Parent installed-artifact/focused checks passed twice: 49 passed in 21.70s and 49 passed in 21.79s; final isolated mode classes passed independently (17 passed in 0.05s). SAST: 108 files, zero findings. Earlier interrupted runs remain non-passing evidence; their real Ollama calls exposed an existing fixture isolation defect, now corrected with temporary deployment paths and mocked model/client/launcher provisioning.

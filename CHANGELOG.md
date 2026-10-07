@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+- 2026-10-07: fix(tests): install locked runtime dependencies before installing the built wheel in isolated artifact fixtures, avoiding offline registry-metadata assumptions on clean CI runners.
+
 - 2026-10-07: feat(setup): preserve the saved retrieval backend across Docker rebuild/update, reject missing Caasiopeia credentials before deployment changes, and retain unrelated environment settings during removal. Version 0.20.0 adds installed-wheel regression coverage for both retrieval backends.
 
 - 2026-10-07: feat(setup): offer explicit local or Caasiopeia retrieval selection in every setup mode; validate connectivity before provisioning, preserve non-secret settings, and keep the Caasiopeia API key environment-only.

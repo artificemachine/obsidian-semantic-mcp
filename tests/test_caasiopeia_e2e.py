@@ -77,8 +77,22 @@ def _build_installed_python(tmp_path):
     )
     assert create.returncode == 0, create.stderr
     python = venv / "bin" / "python"
+    dependency_env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv)}
+    dependency_env.pop("VIRTUAL_ENV", None)
+    sync = subprocess.run(
+        ["uv", "sync", "--frozen", "--offline", "--no-dev", "--no-install-project",
+         "--project", str(repo)],
+        cwd=tmp_path,
+        env=dependency_env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert sync.returncode == 0, sync.stderr
     install = subprocess.run(
-        ["uv", "pip", "install", "--offline", "--python", str(python), str(wheel)],
+        ["uv", "pip", "install", "--offline", "--no-deps", "--python", str(python),
+         str(wheel)],
         cwd=tmp_path,
         capture_output=True,
         text=True,
