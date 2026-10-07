@@ -303,6 +303,7 @@ class TestEntries:
         entry = osm_init._docker_entry()
         assert entry["command"] == "obsidian-semantic-mcp"
         assert entry["args"] == []
+        assert entry["env"] == {"OSM_DOCKER": "1"}
 
     def test_native_entry_command_is_direct(self):
         entry = osm_init._native_entry("/vault", "postgresql://localhost/db")
@@ -311,8 +312,7 @@ class TestEntries:
 
     def test_native_entry_env_vars(self):
         entry = osm_init._native_entry("/vault", "postgresql://localhost/db")
-        assert entry["env"]["OBSIDIAN_VAULT"] == "/vault"
-        assert entry["env"]["DATABASE_URL"] == "postgresql://localhost/db"
+        assert entry["env"] == {}
 
 
 # ── update_claude_config ──────────────────────────────────────────────────────
@@ -460,8 +460,201 @@ class TestRegisterWithClients:
         monkeypatch.setattr(osm_init, "update_claude_config", lambda e: called.append("desktop"))
         monkeypatch.setattr(osm_init, "register_claude_cli", lambda e: called.append("cli"))
         monkeypatch.setattr(osm_init, "update_opencode_config", lambda e: called.append("opencode"))
+        monkeypatch.setattr(osm_init, "update_codex_config", lambda e: called.append("codex"))
         osm_init.register_with_clients({"command": "docker"})
-        assert called == ["desktop", "cli", "opencode"]
+        assert called == ["desktop", "cli", "opencode", "codex"]
+
+
+class TestCodexConfig:
+    def test_path_honors_codex_home_and_default(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "custom"))
+        assert osm_init._codex_cfg_path() == tmp_path / "custom" / "config.toml"
+        monkeypatch.delenv("CODEX_HOME")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert osm_init._codex_cfg_path() == tmp_path / ".codex" / "config.toml"
+
+    def test_absent_client_and_config_is_noop(self, monkeypatch):
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda name: False)
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp", "args": [], "env": {}})
+        assert not osm_init._codex_cfg_path().parent.exists()
+
+    def test_new_config_portable_private_and_idempotent(self, monkeypatch):
+        import stat
+
+        import tomllib
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda name: True)
+        entry = {"command": "obsidian-semantic-mcp", "args": [], "env": {}}
+        osm_init.update_codex_config(entry)
+        path = osm_init._codex_cfg_path()
+        content = path.read_bytes()
+        assert tomllib.loads(content.decode())["mcp_servers"]["obsidian-semantic"] == {"command": entry["command"], "args": []}
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        osm_init.update_codex_config(entry)
+        assert path.read_bytes() == content
+
+    def test_desktop_existing_config_preserves_comments_and_other_server(self, monkeypatch):
+        import tomllib
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda name: False)
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        original = '# user comment\nmodel = "example" # keep\n[mcp_servers.other]\ncommand = "other"\n'
+        path.write_text(original)
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp", "args": [], "env": {"OSM_DOCKER": "1"}})
+        content = path.read_text()
+        assert original in content
+        cfg = tomllib.loads(content)
+        assert cfg["mcp_servers"]["other"]["command"] == "other"
+        assert cfg["mcp_servers"]["obsidian-semantic"]["env"] == {"OSM_DOCKER": "1"}
+
+    @pytest.mark.parametrize("content", ['[broken', 'mcp_servers = "wrong"', '[mcp_servers]\nobsidian-semantic = "wrong"'])
+    def test_invalid_config_unchanged(self, content):
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        path.write_text(content)
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp"})
+        assert path.read_text() == content
+
+    def test_existing_osm_entry_never_overwritten(self):
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        content = '[mcp_servers.obsidian-semantic]\ncommand="custom" # owner\n'
+        path.write_text(content)
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp"})
+        assert path.read_text() == content
+
+    @pytest.mark.parametrize("entry", [
+        {"command": "obsidian-semantic-mcp", "env": {"DATABASE_URL": "fake-secret"}},
+        {"command": "/private/checkout/server"},
+        {"command": "obsidian-semantic-mcp", "args": ["fake-secret"]},
+        {"command": "obsidian-semantic-mcp", "env": {"OSM_DOCKER": "fake-secret"}},
+    ])
+    def test_invalid_or_secret_entry_never_written_or_logged(self, monkeypatch, capsys, entry):
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda name: True)
+        osm_init.update_codex_config(entry)
+        assert not osm_init._codex_cfg_path().exists()
+        assert "fake-secret" not in capsys.readouterr().out
+
+    def test_dry_run_has_no_files_or_payload(self, monkeypatch, capsys):
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda name: True)
+        osm_init.DRY_RUN = True
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp", "args": [], "env": {}})
+        assert not osm_init._codex_cfg_path().parent.exists()
+        assert "[mcp_servers" not in capsys.readouterr().out
+
+    def test_symlink_config_untouched(self, tmp_path):
+        target = tmp_path / "target"
+        target.write_text("# unchanged\n")
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        path.symlink_to(target)
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp"})
+        assert path.is_symlink()
+        assert target.read_text() == "# unchanged\n"
+
+    def test_atomic_write_failure_preserves_config(self, monkeypatch):
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        original = '# unchanged\n'
+        path.write_text(original)
+        def denied(*args):
+            raise OSError("fake-secret")
+        monkeypatch.setattr(osm_init.os, "replace", denied)
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp"})
+        assert path.read_text() == original
+        assert list(path.parent.iterdir()) == [path]
+
+    def test_remove_preserves_unrelated_config_and_is_idempotent(self):
+        import tomllib
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        path.write_text('# keep\n[mcp_servers.other]\ncommand="other"\n[mcp_servers.obsidian-semantic]\ncommand="obsidian-semantic-mcp"\n')
+        osm_init.remove_codex_config()
+        content = path.read_bytes()
+        assert b"# keep" in content
+        assert tomllib.loads(content.decode())["mcp_servers"] == {"other": {"command": "other"}}
+        osm_init.remove_codex_config()
+        assert path.read_bytes() == content
+
+    def test_remove_invalid_config_does_not_write(self):
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        path.write_text("[broken")
+        osm_init.remove_codex_config()
+        assert path.read_text() == "[broken"
+
+    def test_remove_dry_run_does_not_write(self):
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        content = '[mcp_servers.obsidian-semantic]\ncommand="obsidian-semantic-mcp"\n'
+        path.write_text(content)
+        osm_init.DRY_RUN = True
+        osm_init.remove_codex_config()
+        assert path.read_text() == content
+
+    def test_unreadable_config_failure_is_safe(self, monkeypatch, capsys):
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        path.write_text("# keep\n")
+        original_read = Path.read_bytes
+        def denied(self, *args, **kwargs):
+            if self == path:
+                raise PermissionError("fake-secret")
+            return original_read(self, *args, **kwargs)
+        monkeypatch.setattr(Path, "read_bytes", denied)
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp"})
+        osm_init.remove_codex_config()
+        assert "fake-secret" not in capsys.readouterr().out
+        assert original_read(path) == b"# keep\n"
+
+    def test_nonregular_config_is_unchanged(self):
+        path = osm_init._codex_cfg_path()
+        path.mkdir(parents=True)
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp"})
+        osm_init.remove_codex_config()
+        assert path.is_dir()
+        assert not list(path.iterdir())
+
+    def test_cmd_remove_calls_codex_removal(self, monkeypatch, tmp_path):
+        called = []
+        osm_init.DRY_RUN = True
+        monkeypatch.setattr(osm_init, "remove_codex_config", lambda: called.append(True))
+        monkeypatch.setattr(osm_init, "_claude_cfg_path", lambda: tmp_path / "claude.json")
+        osm_init.cmd_remove()
+        assert called == [True]
+
+    @pytest.mark.parametrize("remove", [False, True])
+    def test_concurrent_existing_config_edit_is_preserved(self, monkeypatch, remove):
+        path = osm_init._codex_cfg_path()
+        path.parent.mkdir()
+        original = 'model="original"\n'
+        if remove:
+            original += '[mcp_servers.obsidian-semantic]\ncommand="obsidian-semantic-mcp"\n'
+        path.write_text(original)
+        concurrent = original.replace('"original"', '"concurrent"')
+        original_write = osm_init._write_codex_config
+        def changed_before_write(*args):
+            path.write_text(concurrent)
+            return original_write(*args)
+        monkeypatch.setattr(osm_init, "_write_codex_config", changed_before_write)
+        if remove:
+            osm_init.remove_codex_config()
+        else:
+            osm_init.update_codex_config({"command": "obsidian-semantic-mcp"})
+        assert path.read_text() == concurrent
+        assert list(path.parent.iterdir()) == [path]
+
+    def test_concurrent_creation_is_preserved(self, monkeypatch):
+        path = osm_init._codex_cfg_path()
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda name: True)
+        original_write = osm_init._write_codex_config
+        def created_before_write(*args):
+            path.parent.mkdir()
+            path.write_text('model="concurrent"\n')
+            return original_write(*args)
+        monkeypatch.setattr(osm_init, "_write_codex_config", created_before_write)
+        osm_init.update_codex_config({"command": "obsidian-semantic-mcp"})
+        assert path.read_text() == 'model="concurrent"\n'
+        assert list(path.parent.iterdir()) == [path]
 
 
 # ── prompt_vault ──────────────────────────────────────────────────────────────
@@ -1121,6 +1314,21 @@ class TestCmdRemove:
         launcher.parent.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(osm_init, "_osm_launcher_path", lambda: launcher)
 
+    @pytest.mark.parametrize("dry_run", [False, True])
+    def test_removes_only_native_runtime_unless_dry_run(self, tmp_path, monkeypatch, dry_run):
+        self._setup(monkeypatch, tmp_path)
+        monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: True)
+        monkeypatch.setattr(osm_init, "remove_opencode_config", lambda: None)
+        monkeypatch.setattr(osm_init, "cmd_exists", lambda name: False)
+        osm_init._write_native_runtime(["/vault"], "postgresql://localhost/db")
+        runtime = osm_init.OSM_CONFIG_DIR / "native_runtime.json"
+        unrelated = osm_init.OSM_CONFIG_DIR / "unrelated.json"
+        unrelated.write_text("unchanged")
+        osm_init.DRY_RUN = dry_run
+        osm_init.cmd_remove()
+        assert runtime.exists() is dry_run
+        assert unrelated.read_text() == "unchanged"
+
     def test_user_aborts(self, tmp_path, monkeypatch, capsys):
         self._setup(monkeypatch, tmp_path)
         monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: False)
@@ -1489,6 +1697,27 @@ class TestModeNativeMacos:
         monkeypatch.setattr(osm_init.time, "sleep", lambda n: None)
         # Popen is called directly by mode_native_macos — default to no-op
         monkeypatch.setattr(osm_init.subprocess, "Popen", lambda *a, **kw: MagicMock())
+
+    def test_runtime_write_failure_prevents_registration(self, tmp_path, monkeypatch, capsys):
+        self._setup(monkeypatch, tmp_path)
+        calls = []
+        monkeypatch.setattr(osm_init, "register_with_clients", lambda entry: calls.append(entry))
+        def unavailable(*args):
+            raise OSError("synthetic private data")
+        monkeypatch.setattr(osm_init, "_write_native_runtime", unavailable, raising=False)
+        with pytest.raises(SystemExit):
+            osm_init.mode_native_macos()
+        assert not calls
+        assert "synthetic private data" not in capsys.readouterr().out
+
+    def test_runtime_precedes_secret_free_registration(self, tmp_path, monkeypatch):
+        self._setup(monkeypatch, tmp_path)
+        calls = []
+        monkeypatch.setattr(osm_init, "_write_native_runtime", lambda *args: calls.append("runtime"), raising=False)
+        monkeypatch.setattr(osm_init, "register_with_clients", lambda entry: calls.append(entry))
+        osm_init.mode_native_macos()
+        assert calls[0] == "runtime"
+        assert calls[1]["env"] == {}
 
     def test_brew_not_found_exits(self, tmp_path, monkeypatch):
         self._setup(monkeypatch, tmp_path, has_brew=False)

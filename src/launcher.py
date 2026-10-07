@@ -18,8 +18,11 @@ Environment variables:
 from __future__ import annotations
 
 import os
+import json
+import stat
 import sys
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -27,6 +30,112 @@ from dotenv import load_dotenv
 
 OSM_CONFIG_DIR = Path.home() / ".config" / "obsidian-semantic-mcp"
 PROJECT_ROOT_FILE = OSM_CONFIG_DIR / "project_root"
+
+
+def _validate_native_runtime(data):
+    if not isinstance(data, dict) or set(data) != {"version", "env"}:
+        raise ValueError("invalid native runtime schema")
+    if type(data["version"]) is not int or data["version"] != 1 or not isinstance(data["env"], dict):
+        raise ValueError("invalid native runtime schema")
+    env = data["env"]
+    vault_keys = set(env) & {"OBSIDIAN_VAULT", "OBSIDIAN_VAULTS"}
+    if len(vault_keys) != 1 or set(env) != {"OSM_DOCKER", "DATABASE_URL"} | vault_keys:
+        raise ValueError("invalid native runtime variables")
+    if any(not isinstance(value, str) or not value or "\x00" in value for value in env.values()):
+        raise ValueError("invalid native runtime values")
+    if env["OSM_DOCKER"] != "0" or not env["DATABASE_URL"].startswith(("postgresql://", "postgres://")):
+        raise ValueError("invalid native runtime values")
+    vaults = env[next(iter(vault_keys))].split(",") if "OBSIDIAN_VAULTS" in vault_keys else [env["OBSIDIAN_VAULT"]]
+    if any(not Path(vault).is_absolute() for vault in vaults):
+        raise ValueError("invalid native vault paths")
+    return env
+
+
+def _read_native_runtime(path):
+    """Read an owner-only regular file without following links."""
+    if os.name != "posix":
+        if path.exists() or path.is_symlink():
+            raise ValueError("native runtime permission validation requires POSIX")
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError("unsafe native runtime file") from exc
+    with os.fdopen(fd, "r", encoding="utf-8") as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != os.geteuid() or info.st_nlink != 1 or info.st_size > 65536):
+            raise ValueError("unsafe native runtime file")
+        return _validate_native_runtime(json.loads(source.read(65537)))
+
+
+def write_native_runtime(vaults, db_url, config_dir=None):
+    """Atomically persist native settings outside every MCP client's config."""
+    vaults = [vaults] if isinstance(vaults, str) else list(vaults)
+    env = {"OSM_DOCKER": "0", "DATABASE_URL": db_url}
+    if not vaults:
+        raise ValueError("native runtime requires a vault")
+    env["OBSIDIAN_VAULTS" if len(vaults) > 1 else "OBSIDIAN_VAULT"] = ",".join(vaults)
+    data = {"version": 1, "env": env}
+    _validate_native_runtime(data)
+    encoded = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    if len(encoded.encode("utf-8")) > 65536 or os.name != "posix":
+        raise ValueError("unsupported native runtime configuration")
+    directory = OSM_CONFIG_DIR if config_dir is None else Path(config_dir)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = directory.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) & 0o022):
+        raise ValueError("unsafe native runtime directory")
+    path = directory / "native_runtime.json"
+    _read_native_runtime(path)
+    fd, temporary = tempfile.mkstemp(prefix=".native-runtime-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as target:
+            os.fchmod(target.fileno(), 0o600)
+            target.write(encoded)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _load_native_runtime() -> bool:
+    if os.environ.get("OSM_DOCKER") == "1":
+        return False
+    env = _read_native_runtime(OSM_CONFIG_DIR / "native_runtime.json")
+    if env is None:
+        return False
+    for name, value in env.items():
+        if name in ("OBSIDIAN_VAULT", "OBSIDIAN_VAULTS") and (
+                "OBSIDIAN_VAULT" in os.environ or "OBSIDIAN_VAULTS" in os.environ):
+            continue
+        if name == "DATABASE_URL" and ("DATABASE_URL" in os.environ or "POSTGRES_PASSWORD" in os.environ):
+            continue
+        os.environ.setdefault(name, value)
+    return True
+
+
+def remove_native_runtime(config_dir=None):
+    """Remove only the native runtime file, leaving other OSM configuration intact."""
+    directory = OSM_CONFIG_DIR if config_dir is None else Path(config_dir)
+    try:
+        info = directory.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(info.st_mode) or (os.name == "posix" and info.st_uid != os.geteuid()):
+        raise ValueError("unsafe native runtime directory")
+    path = directory / "native_runtime.json"
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    if os.name == "posix" and info.st_uid != os.geteuid():
+        raise ValueError("unsafe native runtime file")
+    path.unlink()
 
 
 def _docker_bin() -> str:
@@ -102,8 +211,13 @@ def _run_server() -> None:
 
 
 def main() -> None:
+    try:
+        native_runtime_loaded = _load_native_runtime()
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"obsidian-semantic-mcp: invalid native runtime configuration ({type(exc).__name__})", file=sys.stderr)
+        sys.exit(1)
     docker_mode = os.environ.get("OSM_DOCKER")
-    project_root = _project_root()
+    project_root = None if native_runtime_loaded and docker_mode == "0" else _project_root()
 
     # If we found a project root, load its .env file to hydrate local environment
     if project_root:

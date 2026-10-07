@@ -25,6 +25,12 @@ _ORIGINAL_PROJECT_ROOT = osm_init.PROJECT_ROOT
 
 
 @pytest.fixture(autouse=True)
+def _isolate_codex_config(monkeypatch, tmp_path):
+    """All registration and removal tests use disposable Codex configuration."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_pi_agent(monkeypatch):
     """register_pi_agent writes ~/.pi/agent/mcp.json on hosts where ``pi`` is
     installed; stub it so the suite never mutates the developer's real pi config
@@ -55,6 +61,8 @@ def _isolate_osm_config_dir(monkeypatch, tmp_path):
 
     monkeypatch.setattr(config, "OSM_CONFIG_DIR", fake_config, raising=False)
     monkeypatch.setattr(osm_init, "OSM_CONFIG_DIR", fake_config, raising=False)
+    from src import launcher
+    monkeypatch.setattr(launcher, "OSM_CONFIG_DIR", fake_config)
     # PROJECT_ROOT_FILE is derived from OSM_CONFIG_DIR at import time
     # (osm_init.py:311), so repointing the directory alone leaves the
     # already-computed file path aimed at the real config dir. Patch the
