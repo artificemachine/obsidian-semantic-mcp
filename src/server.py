@@ -34,6 +34,7 @@ import contextlib
 import contextvars
 import hashlib
 import logging
+import math
 import os
 import re
 import signal
@@ -42,7 +43,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -322,6 +323,79 @@ def db_conn():
         raise
     else:
         pool.putconn(conn)
+
+
+_SEARCH_METRIC_CONTEXT = contextvars.ContextVar("search_metric_context", default=None)
+_SEARCH_METRIC_BACKENDS = {"local", "caasiopeia", "local_fallback"}
+_SEARCH_METRIC_MODES = {"hybrid", "semantic", "keyword"}
+_SEARCH_METRIC_OUTCOMES = {"success", "error"}
+
+
+def _init_search_metrics():
+    """Create an additive aggregate table; metrics availability is optional."""
+    try:
+        with db_conn() as conn, conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '100ms'")
+            cur.execute("SET LOCAL statement_timeout = '1s'")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS search_metrics_hourly (
+                    hour TIMESTAMPTZ NOT NULL,
+                    backend TEXT NOT NULL CHECK (backend IN ('local', 'caasiopeia', 'local_fallback')),
+                    mode TEXT NOT NULL CHECK (mode IN ('hybrid', 'semantic', 'keyword')),
+                    outcome TEXT NOT NULL CHECK (outcome IN ('success', 'error')),
+                    requests BIGINT NOT NULL DEFAULT 0 CHECK (requests >= 0),
+                    results BIGINT NOT NULL DEFAULT 0 CHECK (results >= 0),
+                    duration_ms DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (duration_ms >= 0),
+                    fallbacks BIGINT NOT NULL DEFAULT 0 CHECK (fallbacks >= 0),
+                    degraded BIGINT NOT NULL DEFAULT 0 CHECK (degraded >= 0),
+                    PRIMARY KEY (hour, backend, mode, outcome)
+                )
+            """)
+    except Exception as exc:  # noqa: BLE001 — optional metrics must never break retrieval
+        log.warning("search metrics initialization failed type=%s", type(exc).__name__)
+
+
+def _record_search_metric(state, duration_ms, now=None):
+    """Upsert only allowlisted dimensions and numeric aggregates, retaining 30 days."""
+    try:
+        if (state["backend"] not in _SEARCH_METRIC_BACKENDS
+                or state["mode"] not in _SEARCH_METRIC_MODES
+                or state["outcome"] not in _SEARCH_METRIC_OUTCOMES):
+            raise ValueError("invalid metric dimensions")
+        if type(state["results"]) is not int or state["results"] < 0:
+            raise ValueError("invalid result count")
+        if any(type(state[key]) is not int or state[key] not in (0, 1)
+               for key in ("fallbacks", "degraded")):
+            raise ValueError("invalid metric flags")
+        if not isinstance(duration_ms, (int, float)) or not math.isfinite(duration_ms) or duration_ms < 0:
+            raise ValueError("invalid metric duration")
+        hour = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
+        with db_conn() as conn, conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '100ms'")
+            cur.execute("SET LOCAL statement_timeout = '1s'")
+            cur.execute("DELETE FROM search_metrics_hourly WHERE hour < %s", (hour - timedelta(hours=719),))
+            cur.execute("""
+                INSERT INTO search_metrics_hourly
+                    (hour, backend, mode, outcome, requests, results, duration_ms, fallbacks, degraded)
+                VALUES (%s, %s, %s, %s, 1, %s, %s, %s, %s)
+                ON CONFLICT (hour, backend, mode, outcome) DO UPDATE SET
+                    requests = search_metrics_hourly.requests + 1,
+                    results = search_metrics_hourly.results + EXCLUDED.results,
+                    duration_ms = search_metrics_hourly.duration_ms + EXCLUDED.duration_ms,
+                    fallbacks = search_metrics_hourly.fallbacks + EXCLUDED.fallbacks,
+                    degraded = search_metrics_hourly.degraded + EXCLUDED.degraded
+            """, (hour, state["backend"], state["mode"], state["outcome"],
+                  state["results"], duration_ms, state["fallbacks"], state["degraded"]))
+    except Exception as exc:  # noqa: BLE001 — optional metrics must never break retrieval
+        log.warning("search metrics write failed type=%s", type(exc).__name__)
+
+
+def _search_metric_success(result_count, degraded=False):
+    state = _SEARCH_METRIC_CONTEXT.get()
+    if state is not None:
+        state.update(outcome="success", results=result_count, degraded=int(degraded))
 
 
 @contextlib.contextmanager
@@ -1297,6 +1371,7 @@ def background_init(vaults: list[str]):
     time.sleep(1)  # give the MCP server a moment to start
     _INDEXING_IN_PROGRESS.set()
     try:
+        _init_search_metrics()
         embed_dim = get_embed_dim()
         init_db(embed_dim)
         for vault in vaults:
@@ -1702,6 +1777,9 @@ async def _search_vault_caasiopeia(
                     type(exc).__name__, exc.trace_id, exc.status)
         if exc.retryable:
             log.warning("search_vault falling back to local ranking after retryable caasiopeia failure")
+            state = _SEARCH_METRIC_CONTEXT.get()
+            if state is not None:
+                state.update(backend="local_fallback", fallbacks=1)
             results = await _search_vault_local(
                 query, limit, min_similarity, mode, vault_filter, vault_ids, graph_expand
             )
@@ -1725,6 +1803,7 @@ async def _search_vault_caasiopeia(
         result.degraded, result.trace_id, int((time.monotonic() - started) * 1000),
     )
     if not shown:
+        _search_metric_success(0, result.degraded)
         if result.passages:
             text = f"No Caasiopeia results met min_similarity={min_similarity}."
         else:
@@ -1738,6 +1817,7 @@ async def _search_vault_caasiopeia(
         parts.extend(await _caas_graph_parts(shown, result.trace_id))
     if result.degraded:
         parts.append(f"_Caasiopeia answered in degraded mode ({result.degradation_reason})._")
+    _search_metric_success(len(shown), result.degraded)
     return _with_retrieval_provenance(
         [TextContent(type="text", text="\n---\n".join(parts))], "Caasiopeia"
     )
@@ -1964,6 +2044,36 @@ async def list_tools():
 # SECURITY: MCP protocol has no built-in auth. Access control relies on
 # the transport layer (stdio). Do not expose this server over network without auth proxy.
 async def call_tool(name: str, arguments: dict):
+    if name != "search_vault" or _SEARCH_METRIC_CONTEXT.get() is not None:
+        return await _call_tool_impl(name, arguments)
+    mode = arguments.get("mode", "hybrid")
+    if not isinstance(mode, str) or mode not in _SEARCH_METRIC_MODES:
+        mode = "hybrid"
+    state = {
+        "backend": "caasiopeia" if RETRIEVAL_BACKEND == "caasiopeia" else "local",
+        "mode": mode, "outcome": "error", "results": 0, "fallbacks": 0, "degraded": 0,
+    }
+    token = _SEARCH_METRIC_CONTEXT.set(state)
+    started = time.monotonic()
+    cancelled = False
+    try:
+        return await _call_tool_impl(name, arguments)
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
+    finally:
+        _SEARCH_METRIC_CONTEXT.reset(token)
+        if not cancelled:
+            duration_ms = max(0.0, (time.monotonic() - started) * 1000)
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, _record_search_metric, state, duration_ms
+                )
+            except Exception as exc:  # noqa: BLE001 — isolate every metrics failure
+                log.warning("search metrics recording failed type=%s", type(exc).__name__)
+
+
+async def _call_tool_impl(name: str, arguments: dict):
 
     # ── search_vault ──────────────────────────────────────────────────────────
     if name == "search_vault":
@@ -2005,7 +2115,9 @@ async def call_tool(name: str, arguments: dict):
         ).hexdigest()
         cached = _search_cache.get(cache_key)
         if cached is not None:
-            return _local_search_response(cached)
+            response, result_count = cached
+            _search_metric_success(result_count)
+            return _local_search_response(response)
 
         try:
             _t0 = time.monotonic()
@@ -2076,6 +2188,7 @@ async def call_tool(name: str, arguments: dict):
             results = [r for r in rows if r[2] >= min_similarity]
 
             if not results:
+                _search_metric_success(0)
                 if _INDEXING_IN_PROGRESS.is_set():
                     return _local_search_response([TextContent(
                         type="text",
@@ -2112,7 +2225,8 @@ async def call_tool(name: str, arguments: dict):
                 mode, _query_hash, limit, len(results), _duration_ms,
             )
 
-            _search_cache.set(cache_key, result)
+            _search_cache.set(cache_key, (result, len(results)))
+            _search_metric_success(len(results))
             return _local_search_response(result)
 
         except Exception as e:

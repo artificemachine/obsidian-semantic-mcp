@@ -14,14 +14,16 @@ import hmac
 import http.server
 import json
 import logging
+import math
 import os
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
+import psycopg2
 import requests
 
 try:
@@ -321,6 +323,85 @@ def _get_ollama_stats(stats: dict) -> None:
     stats.update(result)
 
 
+def read_search_metrics(now: datetime | None = None) -> dict:
+    """Read aggregate-only current UTC hour and the previous 23 buckets."""
+    hour = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(
+        minute=0, second=0, microsecond=0
+    )
+    start, end = hour - timedelta(hours=23), hour + timedelta(hours=1)
+    metrics = {
+        "window": "current_utc_hour_and_previous_23",
+        "window_start": start.isoformat(), "window_end": end.isoformat(),
+        "available": False, "requests": 0, "results": 0, "duration_ms": 0.0,
+        "fallbacks": 0, "degraded": 0, "errors": 0, "series": [],
+    }
+    try:
+        with db_conn() as conn, conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '1s'")
+            cur.execute("""
+                SELECT backend, mode, outcome, SUM(requests), SUM(results),
+                       SUM(duration_ms), SUM(fallbacks), SUM(degraded)
+                FROM search_metrics_hourly
+                WHERE hour >= %s AND hour < %s
+                GROUP BY backend, mode, outcome
+                ORDER BY backend, mode, outcome
+            """, (start, end))
+            rows = cur.fetchall()
+        for backend, mode, outcome, requests_count, results, duration, fallbacks, degraded in rows:
+            if (backend not in ("local", "caasiopeia", "local_fallback")
+                    or mode not in ("hybrid", "semantic", "keyword")
+                    or outcome not in ("success", "error")):
+                raise ValueError("invalid search metric dimensions")
+            counts = [requests_count, results, fallbacks, degraded]
+            if any(isinstance(value, bool) or value < 0 or int(value) != value for value in counts):
+                raise ValueError("invalid search metric counts")
+            duration = float(duration)
+            if not math.isfinite(duration) or duration < 0:
+                raise ValueError("invalid search metric duration")
+            row = dict(zip(("requests", "results", "fallbacks", "degraded"), map(int, counts)))
+            row.update(backend=backend, mode=mode, outcome=outcome, duration_ms=duration,
+                       errors=int(requests_count) if outcome == "error" else 0)
+            metrics["series"].append(row)
+            for name in ("requests", "results", "duration_ms", "fallbacks", "degraded", "errors"):
+                metrics[name] += row[name]
+        if not math.isfinite(metrics["duration_ms"]):
+            raise ValueError("invalid search metric duration total")
+        metrics["available"] = True
+    except (psycopg2.Error, ValueError, TypeError, OverflowError, RuntimeError, OSError) as exc:
+        log.warning("dashboard search metrics unavailable type=%s", type(exc).__name__)
+        metrics.update(requests=0, results=0, duration_ms=0.0, fallbacks=0,
+                       degraded=0, errors=0, series=[])
+    return metrics
+
+
+def _prometheus_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def render_search_metrics(metrics: dict) -> str:
+    """Window aggregates are gauges because expiring buckets decrease values."""
+    lines = []
+    for name, field, divisor in (
+        ("requests", "requests", 1), ("duration_seconds", "duration_ms", 1000),
+        ("results", "results", 1), ("fallbacks", "fallbacks", 1),
+        ("errors", "errors", 1), ("degraded", "degraded", 1),
+    ):
+        metric_name = f"osm_search_{name}"
+        lines.extend((f"# HELP {metric_name} Current UTC hour and previous 23 buckets.",
+                      f"# TYPE {metric_name} gauge"))
+        if not metrics["series"]:
+            lines.append(f"{metric_name} 0")
+        for row in metrics["series"]:
+            labels = ",".join(f'{key}="{_prometheus_label(row[key])}"'
+                              for key in ("backend", "mode", "outcome"))
+            value = str(row[field]) if divisor == 1 else repr(row[field] / divisor)
+            lines.append(f"{metric_name}{{{labels}}} {value}")
+    lines.extend(("# HELP osm_search_metrics_available Whether aggregate data was read successfully.",
+                  "# TYPE osm_search_metrics_available gauge",
+                  f"osm_search_metrics_available {int(metrics['available'])}"))
+    return "\n".join(lines) + "\n"
+
+
 def gather_stats() -> dict:
     stats = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -389,6 +470,7 @@ def gather_stats() -> dict:
     except Exception:
         pass
 
+    stats["search_metrics"] = read_search_metrics()
     return stats
 
 
@@ -589,6 +671,23 @@ HTML_PAGE = """<!DOCTYPE html>
   </div>
 </div>
 
+<div class="grid">
+  <div class="card">
+    <div class="card-label">Searches / Recherches</div>
+    <div class="card-value" id="v-search-requests">—</div>
+    <div class="card-detail">Current UTC hour + previous 23 / Heure UTC actuelle + 23 précédentes</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Search duration / Durée des recherches</div>
+    <div class="card-value" id="v-search-duration">—</div>
+    <div class="card-detail" id="d-search-outcomes"></div>
+  </div>
+  <div class="card">
+    <div class="card-label">Effective backend / Backend effectif</div>
+    <div class="card-detail" id="d-search-backends">—</div>
+  </div>
+</div>
+
 <div class="recent">
   <h2 onclick="toggleRecent()" id="recent-toggle">Recently Indexed <span id="recent-arrow">&#9662;</span></h2>
   <div id="recent-list"><div class="recent-item"><span class="recent-path">Loading...</span></div></div>
@@ -656,6 +755,18 @@ async function fetchStats() {
     const r = await fetch('/api/stats', { signal: ctrl.signal });
     clearTimeout(timer);
     const s = await r.json();
+    const metrics = s.search_metrics;
+    if (metrics) {
+      document.getElementById('v-search-requests').textContent = metrics.available ? metrics.requests : '—';
+      document.getElementById('v-search-duration').textContent = metrics.available ? (metrics.duration_ms / 1000).toFixed(2) + ' s' : '—';
+      document.getElementById('d-search-outcomes').textContent =
+        'Results / Résultats: ' + metrics.results + ' · Fallbacks / Replis: ' + metrics.fallbacks + ' · Errors / Erreurs: ' + metrics.errors;
+      const backends = {};
+      metrics.series.forEach(row => { backends[row.backend] = (backends[row.backend] || 0) + row.requests; });
+      document.getElementById('d-search-backends').textContent = metrics.available
+        ? (Object.entries(backends).map(([name, count]) => name + ': ' + count).join(' · ') || '0')
+        : 'Unavailable / Indisponible';
+    }
 
     dot(document.getElementById('dot-db'), s.db_ok);
     dot(document.getElementById('dot-ollama'), s.ollama_ok);
@@ -906,6 +1017,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._json_response(200, {"busy": not acquired})
         elif parsed.path == "/api/stats":
             self._json_response(200, gather_stats())
+        elif parsed.path == "/metrics":
+            body = render_search_metrics(read_search_metrics()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         else:
             body = _render_page()
             self.send_response(200)
