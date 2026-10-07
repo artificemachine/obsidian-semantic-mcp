@@ -298,3 +298,7 @@ None for the implementation contract. Actual service URL, runtime credential and
 ## Execution amendment — 2026-10-07
 
 Owner explicitly requested GPT-6 Luna subagents for implementation. This supersedes the in-session execution choice: orchestrator plus subagents, with all writers serialized on osm_init.py and tests/test_retrieval_setup.py. One active writer maximum; independent read-only review may overlap. Workers implement only their ready iteration, leave diffs uncommitted, return RED/GREEN evidence and ambiguities; root owns integration, checkpoints, final tests and separately authorized delivery. No automatic model escalation.
+
+## Privacy clarification — 2026-10-07
+
+The new credential non-persistence requirement applies to CAASIOPEIA_API_KEY. Existing owner-only PostgreSQL/dashboard configuration and its established installation contract remain unchanged; this plan does not migrate unrelated credential storage. Local child environments override saved Caasiopeia fields with empty values where required to defeat Docker Compose .env interpolation.

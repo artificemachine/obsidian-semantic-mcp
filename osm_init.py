@@ -102,6 +102,19 @@ def hr():
 # ── Dry-run state ─────────────────────────────────────────────────────────────
 
 DRY_RUN = False
+_INIT_VAULTS = None
+_RETRIEVAL_SETTINGS = None
+_RETRIEVAL_BACKEND = None
+_REMOTE_VAULT_SELECTION = None
+_CAAS_RETRIEVAL_ENV = (
+    "OSM_RETRIEVAL_BACKEND",
+    "CAASIOPEIA_BASE_URL",
+    "CAASIOPEIA_API_KEY",
+    "CAASIOPEIA_SOURCE_MAP",
+    "CAASIOPEIA_SOURCE_ROOTS",
+    "CAASIOPEIA_TOKEN_BUDGET",
+)
+_CAAS_SAVED_ENV = _CAAS_RETRIEVAL_ENV + ("OSM_CAASIOPEIA_HOST_URL",)
 _DRY_ACTIONS: list[str] = []  # collects every skipped action for the summary
 
 
@@ -207,6 +220,8 @@ def _prompt_single_vault():
 
 def prompt_vault():
     """Prompt for one or more vault paths. Returns a list of path strings."""
+    if _INIT_VAULTS is not None:
+        return list(_INIT_VAULTS)
     # --vault flag: single vault, no interactive multi-vault prompt
     if "vault" in _PARAMS:
         p = Path(_PARAMS["vault"]).expanduser().resolve()
@@ -908,6 +923,7 @@ def write_env(
     ollama_data_path=None,
     compose_profiles=None,
     dashboard_token=None,
+    retrieval_settings=None,
 ):
     """
     Write .env in the project root at runtime. This file is gitignored.
@@ -953,6 +969,25 @@ def write_env(
         # (bare `up -d`, the RUNBOOK `down -v; up -d`, restarts) brings up the
         # embeddings engine. Without it, full-docker installs silently lose Ollama.
         lines.append(f"COMPOSE_PROFILES={compose_profiles}")
+    retrieval_settings = _RETRIEVAL_SETTINGS if retrieval_settings is None else retrieval_settings
+    if retrieval_settings:
+        if any(
+            not isinstance(value, str)
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            or "$" in value
+            for value in retrieval_settings.values()
+        ):
+            raise ValueError("unsafe retrieval settings")
+        for key in _CAAS_SAVED_ENV:
+            if key == "CAASIOPEIA_API_KEY":
+                # Runtime credentials are passed in the compose child environment.
+                value = ""
+            else:
+                value = retrieval_settings.get(key, "")
+            encoded = json.dumps(value, ensure_ascii=False) if key in _CAAS_SAVED_ENV and any(
+                character in value for character in ("#", "\"", "'")
+            ) else value
+            lines.append(f"{key}={encoded}")
     if ssh_params:
         lines += [
             "",
@@ -972,7 +1007,16 @@ def write_env(
             print(f"    {_c('90', l)}")
         print()
         return
-    env_path.write_text("\n".join(lines))
+    owned = {line.split("=", 1)[0] for line in lines if "=" in line}
+    if retrieval_settings:
+        owned.update(_CAAS_SAVED_ENV)
+    existing = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    preserved = [
+        line for line in existing
+        if not (line.strip() and not line.lstrip().startswith("#") and
+                line.split("=", 1)[0].strip() in owned)
+    ]
+    env_path.write_text("\n".join(preserved + lines) + "\n", encoding="utf-8")
     env_path.chmod(0o600)  # contains POSTGRES_PASSWORD — owner-only read/write
     ok(f"Wrote {env_path}")
 
@@ -1894,7 +1938,7 @@ def mode_native_macos():
     # ── Claude Desktop + CLI config ───────────────────────────────────────────
     header(f"MCP client configuration  ({_mcp_clients_label()})")
     try:
-        _write_native_runtime(vault, db_url)
+        _write_native_runtime(vault, db_url, retrieval_settings=_RETRIEVAL_SETTINGS)
     except (OSError, ValueError, TypeError) as exc:
         fail(f"Could not write native runtime configuration ({type(exc).__name__})")
         sys.exit(1)
@@ -1940,7 +1984,7 @@ def mode_full_docker():
         env["PGDATA_PATH"] = pgdata_path
     if ollama_data_path:
         env["OLLAMA_DATA_PATH"] = ollama_data_path
-    compose_up(env=env)
+    compose_up(env=_compose_retrieval_env(env))
     wait_for_postgres()
 
     # Ollama container exposes on host port 11435 (avoids conflict with host Ollama).
@@ -1997,7 +2041,7 @@ def mode_docker_host_ollama():
         env["OBSIDIAN_VAULTS"] = ",".join(f"/{Path(v).name}" for v in vaults)
     if pgdata_path:
         env["PGDATA_PATH"] = pgdata_path
-    compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
+    compose_up(services=["postgres", "mcp-server", "dashboard"], env=_compose_retrieval_env(env))
     wait_for_postgres()
 
     header(f"MCP client configuration  ({_mcp_clients_label()})")
@@ -2012,13 +2056,19 @@ def _prompt_vault_location(ssh_user, ssh_host, key_path=None):
     If remote, offer to mount it via sshfs and return the local mount point.
     Returns the local vault path to pass to Docker.
     """
+    global _REMOTE_VAULT_SELECTION
+    if _REMOTE_VAULT_SELECTION is None and _INIT_VAULTS is not None:
+        return list(_INIT_VAULTS)
     # --vault supplied → always local
     if "vault" in _PARAMS:
         vaults = prompt_vault()
         return vaults[0] if len(vaults) == 1 else vaults
 
-    # --vault-remote supplied → skip the menu and go straight to sshfs
-    if "vault_remote" not in _PARAMS:
+    # Setup preflight collects remote paths before any setup mutation.
+    if _REMOTE_VAULT_SELECTION is not None:
+        remote_vault, mount_point = _REMOTE_VAULT_SELECTION
+        _REMOTE_VAULT_SELECTION = None
+    elif "vault_remote" not in _PARAMS:
         print()
         print("  Where is your Obsidian vault?\n")
         print("    1)  On this machine  (local path)")
@@ -2029,11 +2079,12 @@ def _prompt_vault_location(ssh_user, ssh_host, key_path=None):
             return vaults[0] if len(vaults) == 1 else vaults
 
     # Remote vault via sshfs
-    remote_vault = prompt(
-        "Path to vault on remote machine (absolute)", param_key="vault_remote"
-    )
-    default_mount = str(Path.home() / "obsidian-remote-vault")
-    mount_point = prompt("Local mount point", default=default_mount)
+    else:
+        remote_vault = prompt(
+            "Path to vault on remote machine (absolute)", param_key="vault_remote"
+        )
+        default_mount = str(Path.home() / "obsidian-remote-vault")
+        mount_point = prompt("Local mount point", default=default_mount)
 
     mount_path = Path(mount_point).expanduser().resolve()
     if not DRY_RUN:
@@ -2045,6 +2096,9 @@ def _prompt_vault_location(ssh_user, ssh_host, key_path=None):
             info("  brew install --cask macfuse && brew install sshfs")
         else:
             info("  sudo apt install sshfs  (or equivalent)")
+        if _RETRIEVAL_BACKEND == "caasiopeia":
+            fail("Caasiopeia preflight requires the selected remote vault mount")
+            sys.exit(1)
         if not confirm("Continue without sshfs mount?", default="n"):
             sys.exit(0)
         # Fall back to asking for a local path
@@ -2061,6 +2115,8 @@ def _prompt_vault_location(ssh_user, ssh_host, key_path=None):
         ok(f"Mounted {ssh_host}:{remote_vault}  →  {mount_path}")
     else:
         fail("sshfs mount failed — check credentials and remote path")
+        if _RETRIEVAL_BACKEND == "caasiopeia":
+            sys.exit(1)
         if not confirm("Continue with a local vault path instead?", default="n"):
             sys.exit(0)
         return prompt_vault()
@@ -2152,7 +2208,7 @@ def mode_docker_remote_ollama():
         env["OBSIDIAN_VAULTS"] = ",".join(f"/{Path(v).name}" for v in vaults)
     if pgdata_path:
         env["PGDATA_PATH"] = pgdata_path
-    compose_up(services=["postgres", "mcp-server", "dashboard"], env=env)
+    compose_up(services=["postgres", "mcp-server", "dashboard"], env=_compose_retrieval_env(env))
     wait_for_postgres()
 
     header(f"MCP client configuration  ({_mcp_clients_label()})")
@@ -2342,7 +2398,13 @@ def _read_env():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, _, v = line.partition("=")
-            result[k.strip()] = v.strip()
+            key, value = k.strip(), v.strip()
+            if key in _CAAS_SAVED_ENV and value.startswith('"'):
+                decoded = json.loads(value)
+                if not isinstance(decoded, str):
+                    raise ValueError("invalid quoted retrieval setting")
+                value = decoded
+            result[key] = value
     return result
 
 
@@ -2895,6 +2957,193 @@ def cmd_remove():
 
 # ── Install mode tables ───────────────────────────────────────────────────────
 
+def _saved_retrieval_settings(mode):
+    if mode == "1" and platform.system() == "Darwin":
+        from src.launcher import _read_native_runtime
+        return _read_native_runtime(OSM_CONFIG_DIR / "native_runtime.json") or {}
+    try:
+        return _read_env()
+    except OSError as exc:
+        fail(f"Could not read saved deployment configuration ({type(exc).__name__})")
+        sys.exit(1)
+
+
+def _select_retrieval_backend(interactive, mode=""):
+    if "retrieval_backend" in _PARAMS:
+        backend = str(_PARAMS["retrieval_backend"]).strip().lower()
+        origin = "--retrieval-backend"
+    elif os.environ.get("OSM_RETRIEVAL_BACKEND", "").strip():
+        backend = os.environ["OSM_RETRIEVAL_BACKEND"].strip().lower()
+        origin = "OSM_RETRIEVAL_BACKEND"
+    else:
+        try:
+            saved = _saved_retrieval_settings(mode).get("OSM_RETRIEVAL_BACKEND", "").strip().lower()
+        except (OSError, ValueError, TypeError) as exc:
+            fail(f"Saved retrieval configuration is invalid ({type(exc).__name__})")
+            sys.exit(1)
+        if saved:
+            backend = saved
+            origin = "saved configuration"
+        elif interactive:
+            backend = prompt(
+                "Retrieval backend", default="local", choices=["local", "caasiopeia"]
+            ).strip().lower()
+            origin = "prompt"
+        else:
+            backend = "local"
+            origin = "legacy default"
+    if backend not in ("local", "caasiopeia"):
+        fail(f"{origin} has invalid retrieval backend; choose local or caasiopeia")
+        sys.exit(1)
+    return backend
+
+
+def _container_vault_paths(vaults, mode):
+    if mode == "native":
+        return list(vaults)
+    if len(vaults) == 1:
+        return ["/vault"]
+    return [f"/{_vault_basename(vault)}" for vault in vaults]
+
+
+def _docker_caas_url(base_url):
+    parts = urllib.parse.urlsplit(base_url)
+    if (parts.hostname or "").lower() not in ("localhost", "127.0.0.1", "::1"):
+        return base_url
+    host = "host.docker.internal" if platform.system() in ("Darwin", "Windows") else "172.17.0.1"
+    port = f":{parts.port}" if parts.port is not None else ""
+    return urllib.parse.urlunsplit((parts.scheme, host + port, parts.path, parts.query, parts.fragment))
+
+
+def _compose_retrieval_env(base_env=None):
+    """Override .env interpolation so local selection cannot inherit a saved key."""
+    env = dict(os.environ if base_env is None else base_env)
+    for key in _CAAS_RETRIEVAL_ENV:
+        env[key] = ""
+    env["OSM_CAASIOPEIA_HOST_URL"] = ""
+    if _RETRIEVAL_SETTINGS:
+        for key, value in _RETRIEVAL_SETTINGS.items():
+            if key in _CAAS_RETRIEVAL_ENV and key != "CAASIOPEIA_API_KEY":
+                env[key] = value
+        if _RETRIEVAL_SETTINGS.get("OSM_RETRIEVAL_BACKEND") == "caasiopeia":
+            env["CAASIOPEIA_API_KEY"] = os.environ.get("CAASIOPEIA_API_KEY", "")
+    return env
+
+
+def _prepare_retrieval_for_setup(interactive, mode, handler=None):
+    global _INIT_VAULTS, _RETRIEVAL_SETTINGS, _RETRIEVAL_BACKEND, _REMOTE_VAULT_SELECTION
+    backend = _select_retrieval_backend(interactive, mode)
+    _RETRIEVAL_BACKEND = backend
+    if backend == "local":
+        _RETRIEVAL_SETTINGS = {"OSM_RETRIEVAL_BACKEND": "local"}
+        return
+
+    remote_mode = handler is mode_docker_remote_ollama if handler is not None else mode == ("4" if platform.system() == "Darwin" else "3")
+    if remote_mode and "vault" not in _PARAMS:
+        if "vault_remote" in _PARAMS:
+            remote_vault = str(_PARAMS["vault_remote"])
+            default_mount = str(Path.home() / "obsidian-remote-vault")
+            mount_point = prompt("Local mount point", default=default_mount) if interactive else default_mount
+        elif interactive:
+            loc = prompt("Where is your Obsidian vault?", choices=["1", "2"])
+            if loc == "2":
+                remote_vault = prompt("Path to vault on remote machine (absolute)")
+                mount_point = prompt("Local mount point", default=str(Path.home() / "obsidian-remote-vault"))
+            else:
+                remote_vault = None
+                mount_point = None
+        else:
+            fail("Caasiopeia preflight for remote Ollama requires --vault or --vault-remote")
+            sys.exit(1)
+        if remote_vault:
+            if not Path(remote_vault).is_absolute():
+                fail("Remote vault path must be absolute")
+                sys.exit(1)
+            _REMOTE_VAULT_SELECTION = (remote_vault, mount_point)
+            vaults = [str(Path(mount_point).expanduser().resolve())]
+        else:
+            vaults = prompt_vault()
+    else:
+        vaults = prompt_vault()
+    _INIT_VAULTS = list(vaults)
+    setup_mode = "native" if handler is mode_native_macos or (handler is None and mode == "1" and platform.system() == "Darwin") else "docker"
+    config_vaults = _container_vault_paths(vaults, setup_mode)
+    mapping_keys = [Path(path).name for path in config_vaults]
+    try:
+        saved_settings = _saved_retrieval_settings(mode)
+    except (OSError, ValueError, TypeError) as exc:
+        fail(f"Saved retrieval configuration is invalid ({type(exc).__name__})")
+        sys.exit(1)
+    env = dict(saved_settings)
+    env.update(os.environ)
+    env.pop("CAASIOPEIA_API_KEY", None)
+    env["CAASIOPEIA_API_KEY"] = os.environ.get("CAASIOPEIA_API_KEY", "")
+    if not os.environ.get("CAASIOPEIA_BASE_URL", "").strip():
+        env["CAASIOPEIA_BASE_URL"] = env.get("OSM_CAASIOPEIA_HOST_URL", env.get("CAASIOPEIA_BASE_URL", ""))
+    env["OSM_RETRIEVAL_BACKEND"] = backend
+    if not env["CAASIOPEIA_API_KEY"].strip():
+        fail("CAASIOPEIA_API_KEY is required when retrieval backend is caasiopeia")
+        sys.exit(1)
+    fields = (
+        ("CAASIOPEIA_BASE_URL", "Caasiopeia base URL"),
+        ("CAASIOPEIA_SOURCE_MAP", f"Source UUID map ({', '.join(mapping_keys)}=UUID)"),
+    )
+    for key, question in fields:
+        if not env.get(key, "").strip():
+            if not interactive:
+                fail(f"{key} is required when retrieval backend is caasiopeia")
+                sys.exit(1)
+            env[key] = prompt(question).strip()
+    if not env.get("CAASIOPEIA_SOURCE_ROOTS", "").strip() and interactive:
+        env["CAASIOPEIA_SOURCE_ROOTS"] = prompt(
+            f"Source subfolder map ({', '.join(mapping_keys)}=relative/path; blank for vault roots)",
+            default="",
+        ).strip()
+    try:
+        from src.config import load_caasiopeia_settings
+        settings = load_caasiopeia_settings(config_vaults, env)
+        url_parts = urllib.parse.urlsplit(settings.base_url)
+        if url_parts.path not in ("", "/") or url_parts.query or url_parts.fragment:
+            raise ValueError("unsafe CAASIOPEIA_BASE_URL")
+        for key in ("CAASIOPEIA_BASE_URL", "CAASIOPEIA_SOURCE_MAP", "CAASIOPEIA_SOURCE_ROOTS", "CAASIOPEIA_TOKEN_BUDGET"):
+            value = env.get(key, "")
+            if any(ord(character) < 32 or ord(character) == 127 for character in value) or "$" in value:
+                raise ValueError(f"unsafe {key}")
+        candidate_settings = {
+            "OSM_RETRIEVAL_BACKEND": backend,
+            "CAASIOPEIA_BASE_URL": settings.base_url,
+            "CAASIOPEIA_SOURCE_MAP": ",".join(
+                f"{name}={source}" for name, source in settings.source_ids.items()
+            ),
+            "CAASIOPEIA_TOKEN_BUDGET": str(settings.token_budget),
+        }
+        if settings.source_roots:
+            candidate_settings["CAASIOPEIA_SOURCE_ROOTS"] = ",".join(
+                f"{name}={root}" for name, root in settings.source_roots.items()
+            )
+        if setup_mode == "native":
+            from src.launcher import _validate_native_retrieval_settings
+            _validate_native_retrieval_settings(candidate_settings, config_vaults)
+    except (ValueError, RuntimeError) as exc:
+        fail(f"Caasiopeia configuration is invalid ({type(exc).__name__})")
+        sys.exit(1)
+    _RETRIEVAL_SETTINGS = candidate_settings
+    if setup_mode == "docker":
+        _RETRIEVAL_SETTINGS["CAASIOPEIA_BASE_URL"] = _docker_caas_url(settings.base_url)
+        _RETRIEVAL_SETTINGS["OSM_CAASIOPEIA_HOST_URL"] = settings.base_url
+    if not DRY_RUN:
+        from src.caasiopeia_client import CaasClient, CaasError
+        try:
+            client = CaasClient(settings.base_url, settings.api_key, connect_timeout=10, read_timeout=10)
+            client.search(
+                "obsidian-semantic-mcp setup connectivity check",
+                token_budget=min(settings.token_budget, 64),
+                source_ids=settings.source_ids.values(),
+            )
+        except (CaasError, ValueError, RuntimeError) as exc:
+            fail(f"Caasiopeia preflight failed ({type(exc).__name__})")
+            sys.exit(1)
+
 MODES_MACOS = {
     "1": ("Native", "Homebrew + local Postgres + local Ollama", mode_native_macos),
     "2": (
@@ -2943,6 +3192,11 @@ MODES_WINDOWS = {
 
 
 def cmd_init():
+    global _INIT_VAULTS, _RETRIEVAL_SETTINGS, _RETRIEVAL_BACKEND, _REMOTE_VAULT_SELECTION
+    _INIT_VAULTS = None
+    _RETRIEVAL_SETTINGS = None
+    _RETRIEVAL_BACKEND = None
+    _REMOTE_VAULT_SELECTION = None
     print()
     hr()
     print(_c("1", f"  Obsidian Semantic MCP v{APP_VERSION} — Setup Wizard"))
@@ -2994,6 +3248,7 @@ def cmd_init():
 
     choice = prompt("Choose", choices=list(modes.keys()), param_key="mode")
     _, _, handler = modes[choice]
+    _prepare_retrieval_for_setup(interactive=_stdin_is_tty(), mode=choice, handler=handler)
     handler()
 
 
@@ -3211,6 +3466,7 @@ _FLAG_MAP = {
     "vault-cifs-pass": "vault_cifs_pass",
     "yes": "yes",  # boolean — skip all confirms in remove
     "embedding-dim": "embedding_dim",  # osm migrate — new model's output dimension
+    "retrieval-backend": "retrieval_backend",
 }
 
 

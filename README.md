@@ -56,6 +56,20 @@ uv run osm dashboard
 > `--mode 1` is a **native** (non-Docker) macOS install — only pick it if you specifically want Postgres and the server running outside containers.
 > For ephemeral/CI setups, use `--no-persistent` instead.
 
+`osm init` keeps local retrieval as the default. Select `caasiopeia` with
+`--retrieval-backend caasiopeia` or choose it at the setup prompt. Supply
+`CAASIOPEIA_BASE_URL`, `CAASIOPEIA_SOURCE_MAP`, and, when the synced source is a
+vault subfolder, `CAASIOPEIA_SOURCE_ROOTS` through the environment. The map
+must cover every configured vault; a single Docker vault uses the key `vault`,
+and multiple Docker vaults use their mounted directory names. For example,
+`CAASIOPEIA_SOURCE_MAP='vault=<source-uuid>'`. `CAASIOPEIA_API_KEY` must also be
+present in the process environment for the setup connectivity check and at
+runtime; it is never stored in the generated configuration. Docker setup saves
+the engine and other non-secret settings in the private deployment `.env`.
+Native setup saves them in OSM's private runtime file. Re-supply the key through
+the environment whenever the server starts or a Docker deployment is rebuilt.
+Use `--retrieval-backend local` to explicitly return to local ranking.
+
 > **Platform support:** Linux is the CI-tested path — the full test suite (including PostgreSQL integration tests) runs on `ubuntu-latest` in CI on every push. macOS is supported via `osm init --mode 3` (Docker Desktop on the recommended path, or `osm init --mode 1` native) but is not yet covered by CI. Windows is supported via the WSL2 Docker backend and the `install.ps1` / `osm.ps1` launchers, but is **not yet covered by CI**; treat it as community-tested until a Windows runner lands.
 
 **Before you start:**

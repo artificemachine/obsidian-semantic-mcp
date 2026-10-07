@@ -37,6 +37,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -65,8 +66,35 @@ def _docker_mode_defaults(monkeypatch, tmp_path):
 @pytest.fixture(autouse=True)
 def reset_state():
     _reset()
+    osm_init._INIT_VAULTS = None
+    osm_init._RETRIEVAL_SETTINGS = None
+    osm_init._RETRIEVAL_BACKEND = None
+    osm_init._REMOTE_VAULT_SELECTION = None
+
+
+@pytest.fixture(autouse=True)
+def block_unplanned_http(monkeypatch):
+    request = requests.Session.request
+
+    def unexpected_request(self, method, url, *args, **kwargs):
+        if urlsplit(url).hostname in ("127.0.0.1", "localhost", "::1"):
+            return request(self, method, url, *args, **kwargs)
+        pytest.fail(f"unexpected HTTP request to {urlsplit(url).hostname or '<invalid-host>'}")
+
+    from urllib.parse import urlsplit
+    monkeypatch.setattr(requests.Session, "request", unexpected_request)
     yield
     _reset()
+    osm_init._INIT_VAULTS = None
+    osm_init._RETRIEVAL_SETTINGS = None
+    osm_init._RETRIEVAL_BACKEND = None
+    osm_init._REMOTE_VAULT_SELECTION = None
+
+
+def test_init_retrieval_backend_flag_is_parsed():
+    args, params = osm_init._parse_flags(["init", "--retrieval-backend", "caasiopeia"])
+    assert args == ["init"]
+    assert params["retrieval_backend"] == "caasiopeia"
 
 
 def _cp(returncode=0, stdout="", stderr=""):
@@ -1713,7 +1741,7 @@ class TestModeNativeMacos:
     def test_runtime_precedes_secret_free_registration(self, tmp_path, monkeypatch):
         self._setup(monkeypatch, tmp_path)
         calls = []
-        monkeypatch.setattr(osm_init, "_write_native_runtime", lambda *args: calls.append("runtime"), raising=False)
+        monkeypatch.setattr(osm_init, "_write_native_runtime", lambda *args, **kwargs: calls.append("runtime"), raising=False)
         monkeypatch.setattr(osm_init, "register_with_clients", lambda entry: calls.append(entry))
         osm_init.mode_native_macos()
         assert calls[0] == "runtime"
