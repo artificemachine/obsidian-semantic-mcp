@@ -10,3 +10,5 @@
 - Integrated RED: 2 failed, 631 passed, 31 skipped. Dependency inventory was corrected to include declared runtime CLI modules without changing the allowlist; missing-private-file native mode was restored to load its legacy project .env while actual private native configuration still excludes Docker settings.
 - Parent compatibility recheck: 37 passed. Final full suite is running after those corrections; no production client or vault configuration has been touched.
 - Final integrated validation: 637 passed, 31 skipped in 312.27s. Independent core checks: 49 passed; compatibility and dependency checks: 37 passed. Security scan: 105 files, zero findings. Wheel 0.19.0 source bytes match the reviewed CLI and launcher; SHA256 e80e72bb23f32408a8986ea90b96a3256fab77c9381bcd46072f0b08f9187be6.
+
+- Delivery: PR77 merged at c19d534; CI passed; installed CLI and Docker 0.19.0 verified. Installed artifact checks and real Caasiopeia searches passed twice. Desktop UI acceptance remains unverified; Langfuse owner-deferred.

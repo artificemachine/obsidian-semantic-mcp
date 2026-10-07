@@ -310,3 +310,12 @@ unjustified `sequential` verdict — were fixed at authoring time.
 - Native-to-Docker reinitialization requires an explicit non-secret OSM_DOCKER=1 client flag so an older native runtime cannot select native mode.
 - Pair the new installed artifacts with removal: native uninstall removes only the private runtime file; Codex uninstall removes only its OSM table while preserving unrelated TOML. Validate these paths using synthetic fixtures, never run a destructive live uninstall.
 - Privacy acceptance applies to newly generated OSM entries. Existing client entries and unrelated settings are preserved as required by the original side-effect fence; this implementation does not silently scrub historical configuration.
+
+## Build outcome — 2026-10-07
+
+- Implementation shipped in source commit `c9e50da42073b4d8b9de4e184ada026a5e4608ce`, PR #77, merged as `c19d534d39b64db330de9800acfa64f82abdf690`. GitHub unit tests and SAST passed; VM740 gitleaks reported no leaks before push.
+- Full integrated suite passed twice: 637 passed, 31 skipped. Scoped registration/runtime checks passed with 49 tests. Installed wheel validation outside the checkout passed twice, including private runtime permissions, idempotent registration, and targeted removal. Dependency inventory now includes declared runtime CLI modules without an unused-dependency exception.
+- CLI, Docker MCP server, and dashboard 0.19.0 are installed. All four deployment services are healthy. Two real searches through the installed launcher selected Caasiopeia and incremented dashboard request counters (5→6 and 6→7). The existing real Codex entry remained byte-identical across repeated registration and is enabled in `codex mcp list`.
+- Private native settings and paired uninstall are implemented; newly generated Codex entries expose only the installed executable and a non-secret Docker selector. Existing entries are deliberately preserved. Concurrent edits detected before replacement fail safely; the comparison and replacement are not a universal filesystem transaction against uncooperating writers.
+- ChatGPT Desktop UI consumption remains unverified: same-host configuration and CLI discovery are verified, but a desktop restart and `/mcp` check are still required for that live acceptance criterion. This outcome does not claim full desktop end-to-end acceptance.
+- Langfuse activation and remote trace validation are explicitly deferred by the owner. No further Langfuse infrastructure operations were attempted. No protected instruction files were modified.
