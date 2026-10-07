@@ -272,6 +272,7 @@ Use `osm` to set up, manage, and tear down the stack. The wizard installs all pr
 | `osm status` | Check service health (Docker, Ollama reachability/inference, Claude Desktop) |
 | `osm vaults` | List configured Obsidian vault(s) |
 | `osm dashboard` | Open monitoring dashboard in browser |
+| `osm open --vault <absolute-path> <note> ...` | Open existing Markdown notes as desktop tabs |
 | `osm rebuild` | Rebuild Docker images after a code change |
 | `osm tunnel` | Reconnect SSH tunnel (remote Ollama mode) |
 | `osm remove` | Stop services and wipe all volumes and config |
@@ -281,6 +282,26 @@ Use `osm` to set up, manage, and tear down the stack. The wizard installs all pr
 **`osm init` flags:** `--mode`, `--vault`, `--pg-password`, `--persistent` / `--no-persistent`, `--data-dir`, `--ssh-host`, `--ssh-user`, `--ssh-port`, `--ssh-key`, `--vault-remote`
 
 `osm status` probes both Ollama reachability (`/api/tags`) and embeddings (`/api/embeddings`) so it can catch the case where the daemon is up but model execution is broken.
+
+`osm open` uses Obsidian's `obsidian://open` URI handler, so the optional
+desktop `obsidian` CLI is not required. Supply an absolute local vault path
+containing `.obsidian`; relative note paths start at that vault's root.
+Use `--base notes` explicitly when your paths start inside its `notes/`
+directory. The command never guesses a prefix and validates the entire batch
+before launching. Use `osm open --help` for options and `--dry-run` to validate
+and print encoded URIs without opening tabs. Put `--` before filenames that
+start with `-`.
+
+Only existing regular Markdown files inside the vault are accepted; symlink
+escapes and paths containing `#` are rejected. No notes are created or edited.
+Content hashes are compared before and after dispatch; concurrent edits cause
+a nonzero exit. macOS requires `/Applications/Obsidian.app` and `open`; Linux
+requires `xdg-open` and a registered Obsidian URI handler; Windows uses the
+registered URI association through `os.startfile`. macOS/Linux dispatch has a
+10-second timeout per note; Windows' native API provides no timeout. An error
+reports how many requests were dispatched; earlier tabs cannot be rolled back.
+Successful dispatch does not prove tab selection: verify the requested tabs
+in Obsidian separately.
 
 > **Windows launcher:** `osm init` installs `osm.cmd` into `%USERPROFILE%\.local\bin\`. Windows resolves `.cmd` automatically, so you invoke it as `osm` from any terminal. If `osm` is not found, add `%USERPROFILE%\.local\bin` to your `Path` environment variable.
 

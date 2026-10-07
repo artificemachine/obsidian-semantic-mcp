@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+- 2026-10-07: feat(cli): add `osm open --vault` for existing Markdown desktop tabs through encoded Obsidian URIs, with explicit `--base`, batch path validation, containment checks, content hashes, dry-run, and native macOS/Linux/Windows dispatch. The optional desktop CLI is not required; dispatch success is reported separately from tab selection.
+
 - 2026-08-26: fix(dashboard): serve requests with `ThreadingHTTPServer` so one slow client cannot block health checks or other dashboard users. Added a concurrent-request regression test.
 - 2026-07-21: docs(agents): add GEMINI.md agent home for Gemini CLI. Completes the agent-instruction-files trio (CLAUDE.md, AGENTS.md, GEMINI.md) per global rule 19.
 - 2026-07-21: docs(audit): record 2026-07-21 production-ready audit (docs/audits/2026-07-21-production-ready.md). Verdict: READY → strict READY once the 4 follow-up PRs in this release land.
