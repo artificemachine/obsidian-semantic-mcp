@@ -1536,12 +1536,14 @@ def _native_entry(vault, db_url):
     return {"command": "obsidian-semantic-mcp", "args": [], "env": {}}
 
 
-def _write_native_runtime(vault, db_url):
+def _write_native_runtime(vault, db_url, retrieval_settings=None):
     from src.launcher import write_native_runtime
     if DRY_RUN:
         _dry(f"write {OSM_CONFIG_DIR / 'native_runtime.json'}", "owner-only native runtime configuration")
         return
-    write_native_runtime(vault, db_url, config_dir=OSM_CONFIG_DIR)
+    write_native_runtime(
+        vault, db_url, config_dir=OSM_CONFIG_DIR, retrieval_settings=retrieval_settings
+    )
 
 
 # ── Docker compose helpers ────────────────────────────────────────────────────
