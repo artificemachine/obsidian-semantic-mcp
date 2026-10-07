@@ -305,6 +305,23 @@ in Obsidian separately.
 
 > **Windows launcher:** `osm init` installs `osm.cmd` into `%USERPROFILE%\.local\bin\`. Windows resolves `.cmd` automatically, so you invoke it as `osm` from any terminal. If `osm` is not found, add `%USERPROFILE%\.local\bin` to your `Path` environment variable.
 
+### Privacy-safe search observability
+
+The dashboard exposes search aggregates at `/api/stats` under `search_metrics`
+and as Prometheus gauges at `/metrics`. The window includes the current UTC
+hour and the previous 23 hourly buckets; it is not a precise second-level
+rolling window. At most 720 hourly buckets are retained.
+
+Metrics contain allowlisted backend, search mode, and outcome labels plus
+request counts, result counts, total duration, fallback, degraded, and error
+counts. They contain no query, note path, passage, or result text. Failed metric
+writes do not fail searches; unavailable metric reads return zero values with
+an explicit availability flag. Direct local retrieval and fallback from
+Caasiopeia are distinct. Window series are gauges because old buckets expire.
+
+Langfuse provenance is supplied by the optional metadata bridge, never by a
+Langfuse SDK or credentials in OSM. Search remains functional without it.
+
 ### Using with Claude Code, Codex, and OpenCode
 
 When you type `osm init` or `osm dashboard` directly in your terminal, those commands execute normally.

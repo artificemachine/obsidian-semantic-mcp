@@ -535,7 +535,10 @@ class TestSearchInputValidation:
 
         # SQL uses parameterized queries (%s), so the clamped value is in the
         # params tuple — not the SQL string. Third param is the LIMIT value.
-        params = mock_cur.execute.call_args[0][1]
+        params = next(
+            call.args[1] for call in mock_cur.execute.call_args_list
+            if "SELECT path, content" in call.args[0] and "LIMIT %s" in call.args[0]
+        )
         assert params[-1] >= 1, f"LIMIT must be clamped to ≥1, got {params[-1]}"
 
 
