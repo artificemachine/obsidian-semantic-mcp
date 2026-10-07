@@ -28,8 +28,9 @@ RPC_TIMEOUT = 30
 
 WRAPPER = '''
 import asyncio, json, os, sys
-sys.path.insert(0, os.environ["OSM_TEST_SRC"])
-import server
+if os.environ.get("OSM_TEST_SRC"):
+    sys.path.insert(0, os.environ["OSM_TEST_SRC"])
+from src import server
 
 server.background_init = lambda vault_paths: None
 SEEDS = os.environ["OSM_TEST_SEEDS"]
@@ -48,6 +49,98 @@ async def fake_local_search(*args):
 server._search_vault_local = fake_local_search
 asyncio.run(server.main())
 '''
+
+
+def _build_installed_python(tmp_path):
+    repo = Path(__file__).resolve().parent.parent
+    wheel_dir = tmp_path / "wheel"
+    wheel_dir.mkdir()
+    build = subprocess.run(
+        ["uv", "build", "--offline", "--wheel", "--out-dir", str(wheel_dir)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    wheel = next(wheel_dir.glob("*.whl"))
+    venv = tmp_path / "venv"
+    create = subprocess.run(
+        ["uv", "venv", "--offline", "--python", sys.executable,
+         str(venv)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    assert create.returncode == 0, create.stderr
+    python = venv / "bin" / "python"
+    dependency_env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv)}
+    dependency_env.pop("VIRTUAL_ENV", None)
+    sync = subprocess.run(
+        ["uv", "sync", "--frozen", "--offline", "--no-dev", "--no-install-project",
+         "--project", str(repo)],
+        cwd=tmp_path,
+        env=dependency_env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert sync.returncode == 0, sync.stderr
+    install = subprocess.run(
+        ["uv", "pip", "install", "--offline", "--no-deps", "--python", str(python),
+         str(wheel)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    assert install.returncode == 0, install.stderr
+    return python, venv
+
+
+def _start_installed_server(python, tmp_path, vault, caas_stand_in, backend):
+    wrapper = tmp_path / f"run_{backend}.py"
+    wrapper.write_text(WRAPPER, encoding="utf-8")
+    env = _env(tmp_path, vault, caas_stand_in.url)
+    env.pop("OSM_TEST_SRC")
+    if backend == "local":
+        for name in (
+            "OSM_RETRIEVAL_BACKEND", "CAASIOPEIA_BASE_URL", "CAASIOPEIA_API_KEY",
+            "CAASIOPEIA_SOURCE_MAP", "CAASIOPEIA_SOURCE_ROOTS",
+        ):
+            env.pop(name, None)
+        env["OSM_RETRIEVAL_BACKEND"] = "local"
+    proc = subprocess.Popen(
+        [str(python), str(wrapper)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=tmp_path,
+        env=env,
+    )
+    rpc = Rpc(proc)
+    init = rpc.call("initialize", {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "installed-e2e", "version": "0"},
+    })
+    assert "result" in init, init
+    rpc.notify("notifications/initialized")
+    return proc, rpc
+
+
+def _stop_server(proc):
+    proc.kill()
+    proc.wait(timeout=10)
+    proc.stdin.close()
+    proc.stdout.close()
+    proc.stderr.close()
 
 
 class CaasStandIn(ThreadingHTTPServer):
@@ -281,3 +374,45 @@ def test_startup_refuses_caasiopeia_without_required_configuration(tmp_path, vau
     assert done.returncode == 1
     assert "CAASIOPEIA_SOURCE_MAP" in done.stderr
     assert API_KEY not in done.stderr + done.stdout
+
+
+def test_installed_artifact_search_workflows_for_both_backends(tmp_path, vault, caas_stand_in):
+    python, venv = _build_installed_python(tmp_path)
+    module = subprocess.run(
+        [str(python), "-c",
+         "import json, osm_init, src.server, src.launcher; "
+         "print(json.dumps({'osm_init': osm_init.__file__, 'server': src.server.__file__, "
+         "'launcher': src.launcher.__file__}))"],
+        cwd=tmp_path,
+        env={"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path / "home"),
+             "DATABASE_URL": "postgresql://osm:unused@127.0.0.1:1/unused",
+             "OBSIDIAN_VAULT": str(vault)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert module.returncode == 0, module.stderr
+    modules = json.loads(module.stdout.strip())
+    for installed_module in modules.values():
+        assert Path(installed_module).is_relative_to(venv)
+        assert str(SRC.parent) not in installed_module
+
+    local_proc, local_rpc = _start_installed_server(python, tmp_path, vault, caas_stand_in, "local")
+    try:
+        local_text = _search(local_rpc)
+        assert local_text.startswith("_Retrieval backend: local._")
+        assert not caas_stand_in.requests
+    finally:
+        _stop_server(local_proc)
+
+    caas_stand_in.passages = [_passage("notes/foo.md", "installed wheel result")]
+    caas_proc, caas_rpc = _start_installed_server(python, tmp_path, vault, caas_stand_in, "caasiopeia")
+    try:
+        caas_text = _search(caas_rpc)
+        assert caas_text.startswith("_Retrieval backend: Caasiopeia._")
+        assert "installed wheel result" in caas_text
+        assert caas_stand_in.requests[-1]["headers"]["Authorization"] == f"Bearer {API_KEY}"
+        assert API_KEY not in caas_text
+    finally:
+        _stop_server(caas_proc)

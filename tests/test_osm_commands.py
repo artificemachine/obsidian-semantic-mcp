@@ -37,6 +37,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -51,22 +52,50 @@ def _docker_mode_defaults(monkeypatch, tmp_path):
     Sets vault and pg_password in _PARAMS so the real prompt_* functions
     short-circuit without touching stdin.
     """
+    monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(osm_init, "check_docker", lambda: True)
     monkeypatch.setattr(osm_init, "check_compose", lambda: True)
+    monkeypatch.setattr(osm_init, "_ensure_deploy_dir", lambda: None)
     osm_init._PARAMS["vault"] = str(tmp_path)
     osm_init._PARAMS["pg_password"] = "pw"
     monkeypatch.setattr(osm_init, "prompt_persistent_storage", lambda **kw: (None, None))
     monkeypatch.setattr(osm_init, "write_env", lambda *a, **kw: None)
     monkeypatch.setattr(osm_init, "compose_up", lambda *a, **kw: None)
     monkeypatch.setattr(osm_init, "wait_for_postgres", lambda **kw: True)
+    monkeypatch.setattr(osm_init, "_ensure_ollama_model", lambda *a, **kw: None)
     monkeypatch.setattr(osm_init, "update_claude_config", lambda *a, **kw: None)
+    monkeypatch.setattr(osm_init, "register_with_clients", lambda *a, **kw: None)
+    monkeypatch.setattr(osm_init, "_done_docker", lambda *a, **kw: None)
+    monkeypatch.setattr(osm_init, "_done_docker_remote", lambda *a, **kw: None)
 
 
 @pytest.fixture(autouse=True)
 def reset_state():
     _reset()
+    osm_init._INIT_VAULTS = None
+    osm_init._RETRIEVAL_SETTINGS = None
+    osm_init._RETRIEVAL_BACKEND = None
+    osm_init._REMOTE_VAULT_SELECTION = None
+
+
+@pytest.fixture(autouse=True)
+def block_unplanned_http(monkeypatch):
+    def unexpected_request(self, method, url, *args, **kwargs):
+        pytest.fail("unexpected HTTP request in osm command tests")
+
+    monkeypatch.setattr(requests.Session, "request", unexpected_request)
     yield
     _reset()
+    osm_init._INIT_VAULTS = None
+    osm_init._RETRIEVAL_SETTINGS = None
+    osm_init._RETRIEVAL_BACKEND = None
+    osm_init._REMOTE_VAULT_SELECTION = None
+
+
+def test_init_retrieval_backend_flag_is_parsed():
+    args, params = osm_init._parse_flags(["init", "--retrieval-backend", "caasiopeia"])
+    assert args == ["init"]
+    assert params["retrieval_backend"] == "caasiopeia"
 
 
 def _cp(returncode=0, stdout="", stderr=""):
@@ -1304,7 +1333,12 @@ class TestCmdUpdate:
 
 class TestCmdRemove:
     def _setup(self, monkeypatch, tmp_path, cfg_path=None):
+        from src import launcher
+
         osm_init.PROJECT_ROOT = tmp_path
+        config_dir = tmp_path / "config"
+        monkeypatch.setattr(osm_init, "OSM_CONFIG_DIR", config_dir)
+        monkeypatch.setattr(launcher, "OSM_CONFIG_DIR", config_dir)
         monkeypatch.setattr(
             osm_init, "run",
             lambda *a, **kw: _cp(0, stdout="container-id"),
@@ -1341,9 +1375,17 @@ class TestCmdRemove:
         osm_init.cmd_remove()
         assert any("remove" in a or ".env" in a for a in osm_init._DRY_ACTIONS)
 
-    def test_env_file_deleted(self, tmp_path, monkeypatch):
+    def test_env_file_preserves_unowned_settings(self, tmp_path, monkeypatch):
         env_file = tmp_path / ".env"
-        env_file.write_text("KEY=val\n")
+        env_file.write_text("OSM_RETRIEVAL_BACKEND=caasiopeia\nOWNER_SETTING=keep\n")
+        self._setup(monkeypatch, tmp_path)
+        monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: True)
+        osm_init.cmd_remove()
+        assert env_file.read_text() == "OWNER_SETTING=keep\n"
+
+    def test_env_file_deleted_when_only_osm_settings_remain(self, tmp_path, monkeypatch):
+        env_file = tmp_path / ".env"
+        env_file.write_text("OSM_RETRIEVAL_BACKEND=local\nOBSIDIAN_VAULT=/vault\n")
         self._setup(monkeypatch, tmp_path)
         monkeypatch.setattr(osm_init, "confirm", lambda *a, **kw: True)
         osm_init.cmd_remove()
@@ -1677,7 +1719,14 @@ class TestModeDockerRemoteOllama:
 class TestModeNativeMacos:
     def _setup(self, monkeypatch, tmp_path,
                has_brew=True, has_psql=True, has_ollama=True, has_uv=True,
-               ollama_up=True, db_exists=True):
+               ollama_up=True, db_exists=True, ensure_model=False):
+        from src import launcher
+
+        config_dir = tmp_path / "config"
+        monkeypatch.setattr(osm_init, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(osm_init, "OSM_CONFIG_DIR", config_dir)
+        monkeypatch.setattr(launcher, "OSM_CONFIG_DIR", config_dir)
+
         def fake_exists(name):
             return {"brew": has_brew, "psql": has_psql,
                     "ollama": has_ollama, "uv": has_uv}.get(name, False)
@@ -1692,8 +1741,11 @@ class TestModeNativeMacos:
 
         monkeypatch.setattr(osm_init, "run", fake_run)
         monkeypatch.setattr(osm_init, "check_ollama_at", lambda *a, **kw: ollama_up)
+        if not ensure_model:
+            monkeypatch.setattr(osm_init, "_ensure_ollama_model", lambda *a, **kw: None)
         monkeypatch.setattr(osm_init, "update_claude_config", lambda *a, **kw: None)
         monkeypatch.setattr(osm_init, "_done_native", lambda *a, **kw: None)
+        monkeypatch.setattr(osm_init, "register_with_clients", lambda *a, **kw: None)
         monkeypatch.setattr(osm_init.time, "sleep", lambda n: None)
         # Popen is called directly by mode_native_macos — default to no-op
         monkeypatch.setattr(osm_init.subprocess, "Popen", lambda *a, **kw: MagicMock())
@@ -1713,7 +1765,7 @@ class TestModeNativeMacos:
     def test_runtime_precedes_secret_free_registration(self, tmp_path, monkeypatch):
         self._setup(monkeypatch, tmp_path)
         calls = []
-        monkeypatch.setattr(osm_init, "_write_native_runtime", lambda *args: calls.append("runtime"), raising=False)
+        monkeypatch.setattr(osm_init, "_write_native_runtime", lambda *args, **kwargs: calls.append("runtime"), raising=False)
         monkeypatch.setattr(osm_init, "register_with_clients", lambda entry: calls.append(entry))
         osm_init.mode_native_macos()
         assert calls[0] == "runtime"
@@ -1786,7 +1838,7 @@ class TestModeNativeMacos:
         assert any("ollama" in str(c) for c in popen_cmds)
 
     def test_native_macos_ensures_embedding_model_when_missing(self, tmp_path, monkeypatch):
-        self._setup(monkeypatch, tmp_path)
+        self._setup(monkeypatch, tmp_path, ensure_model=True)
         verify_calls = []
         post_calls = []
 

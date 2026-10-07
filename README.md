@@ -56,6 +56,20 @@ uv run osm dashboard
 > `--mode 1` is a **native** (non-Docker) macOS install — only pick it if you specifically want Postgres and the server running outside containers.
 > For ephemeral/CI setups, use `--no-persistent` instead.
 
+`osm init` keeps local retrieval as the default. Select `caasiopeia` with
+`--retrieval-backend caasiopeia` or choose it at the setup prompt. Supply
+`CAASIOPEIA_BASE_URL`, `CAASIOPEIA_SOURCE_MAP`, and, when the synced source is a
+vault subfolder, `CAASIOPEIA_SOURCE_ROOTS` through the environment. The map
+must cover every configured vault; a single Docker vault uses the key `vault`,
+and multiple Docker vaults use their mounted directory names. For example,
+`CAASIOPEIA_SOURCE_MAP='vault=<source-uuid>'`. `CAASIOPEIA_API_KEY` must also be
+present in the process environment for the setup connectivity check and at
+runtime; it is never stored in the generated configuration. Docker setup saves
+the engine and other non-secret settings in the private deployment `.env`.
+Native setup saves them in OSM's private runtime file. Re-supply the key through
+the environment whenever the server starts or a Docker deployment is rebuilt.
+Use `--retrieval-backend local` to explicitly return to local ranking.
+
 > **Platform support:** Linux is the CI-tested path — the full test suite (including PostgreSQL integration tests) runs on `ubuntu-latest` in CI on every push. macOS is supported via `osm init --mode 3` (Docker Desktop on the recommended path, or `osm init --mode 1` native) but is not yet covered by CI. Windows is supported via the WSL2 Docker backend and the `install.ps1` / `osm.ps1` launchers, but is **not yet covered by CI**; treat it as community-tested until a Windows runner lands.
 
 **Before you start:**
@@ -529,6 +543,8 @@ Rules of the opt-in mode:
 - **Mode mapping.** `hybrid` maps to `hybrid`, `semantic` to `dense`, `keyword` to `lexical`.
 - **Source identity.** `graph_expand` follows wikilinks only from passages whose `external_id` is the forward-slash path, relative to the directory the source was synced from (the vault root, or the `CAASIOPEIA_SOURCE_ROOTS` subfolder), of an existing note inside that directory in the vault mapped to the passage's source. Any other `external_id` (absolute, `..`, unmapped source, missing file, symlink out of the vault) is ignored for expansion. Wikilink expansion still reads the local `notes` and `note_links` tables, so the local index must keep running. The `external_id` format is what Caasiopeia's sync documents for a root-relative source; verify it against a real response before relying on graph expansion.
 - **Rollback.** Unset the variables or set `OSM_RETRIEVAL_BACKEND=local` and restart the MCP server. Nothing in Caasiopeia is modified.
+- **Rebuild and update.** The backend, service URL, source map and optional source roots are saved without the API key. Keep `CAASIOPEIA_API_KEY` in the environment used to run `osm rebuild` or `osm update`; without it, OSM stops before pulling, building or recreating services. The key is never saved. Local installations pass blank Caasiopeia values to Compose even when old values remain in the `.env` file.
+- **Removal.** `osm remove` clears OSM-owned `.env` settings and retains unrelated lines added by the owner.
 
 `local` remains the default; making `caasiopeia` the default is a separate decision that needs a validated Caasiopeia corpus for the vault.
 

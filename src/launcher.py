@@ -17,19 +17,27 @@ Environment variables:
 """
 from __future__ import annotations
 
-import os
 import json
+import os
 import stat
-import sys
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
 OSM_CONFIG_DIR = Path.home() / ".config" / "obsidian-semantic-mcp"
 PROJECT_ROOT_FILE = OSM_CONFIG_DIR / "project_root"
+_RETRIEVAL_RUNTIME_VARIABLES = {
+    "OSM_RETRIEVAL_BACKEND",
+    "CAASIOPEIA_BASE_URL",
+    "CAASIOPEIA_SOURCE_MAP",
+    "CAASIOPEIA_SOURCE_ROOTS",
+    "CAASIOPEIA_TOKEN_BUDGET",
+}
 
 
 def _validate_native_runtime(data):
@@ -39,15 +47,22 @@ def _validate_native_runtime(data):
         raise ValueError("invalid native runtime schema")
     env = data["env"]
     vault_keys = set(env) & {"OBSIDIAN_VAULT", "OBSIDIAN_VAULTS"}
-    if len(vault_keys) != 1 or set(env) != {"OSM_DOCKER", "DATABASE_URL"} | vault_keys:
+    allowed_env = {"OSM_DOCKER", "DATABASE_URL"} | vault_keys | _RETRIEVAL_RUNTIME_VARIABLES
+    required_env = {"OSM_DOCKER", "DATABASE_URL"} | vault_keys
+    if len(vault_keys) != 1 or not required_env <= set(env) or set(env) - allowed_env:
         raise ValueError("invalid native runtime variables")
     if any(not isinstance(value, str) or not value or "\x00" in value for value in env.values()):
         raise ValueError("invalid native runtime values")
+    if any(any(character in env[name] for character in "\r\n")
+           for name in set(env) & _RETRIEVAL_RUNTIME_VARIABLES):
+        raise ValueError("invalid native retrieval settings")
     if env["OSM_DOCKER"] != "0" or not env["DATABASE_URL"].startswith(("postgresql://", "postgres://")):
         raise ValueError("invalid native runtime values")
     vaults = env[next(iter(vault_keys))].split(",") if "OBSIDIAN_VAULTS" in vault_keys else [env["OBSIDIAN_VAULT"]]
     if any(not Path(vault).is_absolute() for vault in vaults):
         raise ValueError("invalid native vault paths")
+    if set(env) & _RETRIEVAL_RUNTIME_VARIABLES:
+        _validate_native_retrieval_settings(env, vaults)
     return env
 
 
@@ -71,13 +86,19 @@ def _read_native_runtime(path):
         return _validate_native_runtime(json.loads(source.read(65537)))
 
 
-def write_native_runtime(vaults, db_url, config_dir=None):
+def write_native_runtime(vaults, db_url, config_dir=None, retrieval_settings=None):
     """Atomically persist native settings outside every MCP client's config."""
     vaults = [vaults] if isinstance(vaults, str) else list(vaults)
     env = {"OSM_DOCKER": "0", "DATABASE_URL": db_url}
     if not vaults:
         raise ValueError("native runtime requires a vault")
     env["OBSIDIAN_VAULTS" if len(vaults) > 1 else "OBSIDIAN_VAULT"] = ",".join(vaults)
+    if retrieval_settings is not None:
+        if not isinstance(retrieval_settings, dict) or set(retrieval_settings) - _RETRIEVAL_RUNTIME_VARIABLES:
+            raise ValueError("invalid native retrieval settings")
+        if any(not isinstance(value, str) or not value or any(character in value for character in "\x00\r\n") for value in retrieval_settings.values()):
+            raise ValueError("invalid native retrieval settings")
+        env.update(retrieval_settings)
     data = {"version": 1, "env": env}
     _validate_native_runtime(data)
     encoded = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
@@ -103,13 +124,56 @@ def write_native_runtime(vaults, db_url, config_dir=None):
         Path(temporary).unlink(missing_ok=True)
 
 
+def _validate_native_retrieval_settings(env, vaults):
+    from src.config import (
+        MAX_CAASIOPEIA_TOKEN_BUDGET,
+        _parse_source_map,
+        _parse_source_roots,
+        resolve_retrieval_backend,
+    )
+
+    try:
+        backend = resolve_retrieval_backend(env)
+        if backend == "caasiopeia" and not {
+            "CAASIOPEIA_BASE_URL", "CAASIOPEIA_SOURCE_MAP"
+        } <= set(env):
+            raise ValueError
+        if "CAASIOPEIA_BASE_URL" in env:
+            parts = urlsplit(env["CAASIOPEIA_BASE_URL"])
+            if (parts.scheme not in ("http", "https") or not parts.hostname
+                    or parts.username is not None or parts.password is not None
+                    or parts.path not in ("", "/") or parts.query or parts.fragment):
+                raise ValueError
+            _ = parts.port
+        source_ids = None
+        if "CAASIOPEIA_SOURCE_MAP" in env:
+            source_ids = _parse_source_map(env["CAASIOPEIA_SOURCE_MAP"], vaults)
+        if "CAASIOPEIA_SOURCE_ROOTS" in env:
+            if source_ids is None:
+                raise ValueError
+            _parse_source_roots(env["CAASIOPEIA_SOURCE_ROOTS"], list(source_ids))
+        if "CAASIOPEIA_TOKEN_BUDGET" in env:
+            budget = int(env["CAASIOPEIA_TOKEN_BUDGET"])
+            if not 1 <= budget <= MAX_CAASIOPEIA_TOKEN_BUDGET:
+                raise ValueError
+    except (ValueError, TypeError, RuntimeError) as exc:
+        raise ValueError("invalid native retrieval settings") from exc
+
+
 def _load_native_runtime() -> bool:
     if os.environ.get("OSM_DOCKER") == "1":
         return False
     env = _read_native_runtime(OSM_CONFIG_DIR / "native_runtime.json")
     if env is None:
         return False
+    explicit_backend = os.environ.get("OSM_RETRIEVAL_BACKEND")
+    incompatible_backend = (
+        explicit_backend is not None
+        and explicit_backend.strip().lower() != env.get("OSM_RETRIEVAL_BACKEND", "local").strip().lower()
+    )
     for name, value in env.items():
+        if incompatible_backend and name in _RETRIEVAL_RUNTIME_VARIABLES:
+            continue
         if name in ("OBSIDIAN_VAULT", "OBSIDIAN_VAULTS") and (
                 "OBSIDIAN_VAULT" in os.environ or "OBSIDIAN_VAULTS" in os.environ):
             continue
@@ -168,6 +232,26 @@ def _validate_env() -> None:
         sys.exit(1)
     if not os.environ.get("DATABASE_URL") and not os.environ.get("POSTGRES_PASSWORD"):
         print("obsidian-semantic-mcp: missing DATABASE_URL or POSTGRES_PASSWORD", file=sys.stderr)
+        sys.exit(1)
+
+
+def _validate_retrieval_env() -> None:
+    from src.config import (
+        RETRIEVAL_BACKEND_CAASIOPEIA,
+        ConfigError,
+        load_caasiopeia_settings,
+        resolve_retrieval_backend,
+    )
+
+    try:
+        backend = resolve_retrieval_backend(os.environ)
+        if backend == RETRIEVAL_BACKEND_CAASIOPEIA:
+            vaults = os.environ.get("OBSIDIAN_VAULTS", "").strip()
+            vault_paths = vaults.split(",") if vaults else [os.environ["OBSIDIAN_VAULT"]]
+            load_caasiopeia_settings(vault_paths, os.environ)
+    except (ConfigError, KeyError) as exc:
+        message = str(exc) if isinstance(exc, ConfigError) else "OBSIDIAN_VAULT is required"
+        print(f"obsidian-semantic-mcp: invalid retrieval configuration ({message})", file=sys.stderr)
         sys.exit(1)
 
 
@@ -251,6 +335,7 @@ def main() -> None:
 
     # Local fallback or native mode
     _validate_env()
+    _validate_retrieval_env()
     _run_server()
 
 

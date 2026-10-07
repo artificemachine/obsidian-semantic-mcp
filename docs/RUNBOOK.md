@@ -35,6 +35,12 @@ docker compose logs -f mcp-server  # MCP server only
 
 This catches the failure mode where the Ollama daemon is up but actual model execution is broken.
 
+### Rebuild or update with Caasiopeia retrieval
+
+`osm init` saves the selected retrieval backend and non-secret Caasiopeia settings in the deployment configuration. The API key stays in the current process environment. Supply `CAASIOPEIA_API_KEY` in the shell or service environment before running `osm rebuild` or `osm update`; if it is missing, OSM stops before pulling base images, building images, changing `OSM_VERSION`, or recreating services. A local backend clears stale Caasiopeia variables from the Compose process environment.
+
+`osm remove` removes OSM-owned environment settings. Owner-added `.env` lines and unrelated files remain.
+
 ## Common Incidents
 
 ### MCP server won't start
@@ -208,7 +214,7 @@ claude mcp add --scope user obsidian-semantic -- \
 Wipes all data and re-indexes from scratch:
 
 ```bash
-osm remove --yes        # Stop services, wipe volumes, remove .env
+osm remove --yes        # Stop services, wipe volumes, remove OSM-owned settings
 osm init                # Re-run wizard from scratch
 ```
 

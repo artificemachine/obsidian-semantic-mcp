@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+- 2026-10-07: fix(tests): install locked runtime dependencies before installing the built wheel in isolated artifact fixtures, avoiding offline registry-metadata assumptions on clean CI runners.
+
+- 2026-10-07: feat(setup): preserve the saved retrieval backend across Docker rebuild/update, reject missing Caasiopeia credentials before deployment changes, and retain unrelated environment settings during removal. Version 0.20.0 adds installed-wheel regression coverage for both retrieval backends.
+
+- 2026-10-07: feat(setup): offer explicit local or Caasiopeia retrieval selection in every setup mode; validate connectivity before provisioning, preserve non-secret settings, and keep the Caasiopeia API key environment-only.
+
 - 2026-10-07: feat(cli): add `osm open --vault` for existing Markdown desktop tabs through encoded Obsidian URIs, with explicit `--base`, batch path validation, containment checks, content hashes, dry-run, and native macOS/Linux/Windows dispatch. The optional desktop CLI is not required; dispatch success is reported separately from tab selection.
 
 - 2026-08-26: fix(dashboard): serve requests with `ThreadingHTTPServer` so one slow client cannot block health checks or other dashboard users. Added a concurrent-request regression test.
@@ -445,3 +451,5 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 2026-10-07: feat(mcp): add preserving shared Codex CLI/ChatGPT Desktop registration, private native runtime configuration, explicit Docker mode precedence, and paired targeted removal; prepare 0.19.0.
 
 - 2026-10-07: docs(mcp): record merged 0.19.0 installation and reproduced validation; distinguish unverified Desktop UI acceptance and owner-deferred Langfuse.
+
+- 2026-10-07: feat(setup): persist native retrieval settings without credentials, retain legacy runtime compatibility and validate effective retrieval configuration before launch.
