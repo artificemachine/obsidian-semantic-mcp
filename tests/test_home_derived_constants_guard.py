@@ -4,6 +4,9 @@ A constant such as ``OSM_CONFIG_DIR = Path.home() / ...`` is computed when its m
 so redirecting HOME later changes nothing. Each one needs an explicit ``monkeypatch.setattr`` in
 tests/conftest.py, otherwise the suite reads and writes the developer's real installation. The first
 three of these were found one failing test at a time; this test finds the next one when it is added.
+
+Coverage is only as wide as the module lists below: MODULES and SCANNED_ONLY are written by hand, so a
+new module that defines a home-derived constant is not seen until it is added to one of them.
 """
 import ast
 import re
@@ -72,6 +75,6 @@ def test_the_guard_flags_a_constant_whose_patch_is_removed():
     assert "osm_init.py:_DASHBOARD_TOKEN_FILE" in unisolated(stripped)
 
 
-def test_the_guard_flags_an_unlisted_constant_in_a_module_it_only_scans():
+def test_a_scanned_only_module_accepts_only_its_listed_not_redirectable_constant():
     assert ("src/server.py", "_ENV_SEARCH_PATHS") in NOT_REDIRECTABLE
     assert _home_derived("src/server.py") == ["_ENV_SEARCH_PATHS"]
