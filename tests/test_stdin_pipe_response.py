@@ -96,6 +96,11 @@ def test_initialize_responds_over_anonymous_pipe(tmp_path):
         "postgresql://obsidian_brain:obsidian_brain@127.0.0.1:5433/obsidian_brain",
     )
     env["OSM_DOCKER"] = "0"  # force in-process server
+    # The child resolves its install pointer and .env from HOME; a host with a
+    # saved Caasiopeia selection would make it exit before answering (#81).
+    home = tmp_path / "home"
+    home.mkdir()
+    env["HOME"] = str(home)
     env["PYTHONUNBUFFERED"] = "1"
 
     proc = subprocess.Popen(

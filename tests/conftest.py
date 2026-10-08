@@ -21,13 +21,32 @@ try:
 except Exception:  # pragma: no cover - dashboard needs DB env vars to import
     dashboard = None
 
-_ORIGINAL_PROJECT_ROOT = osm_init.PROJECT_ROOT
+# osm_init.PROJECT_ROOT is resolved at import from the host's recorded install
+# pointer, which would make setup tests read the host's installed .env. The
+# checkout is what a clean CI host resolves to.
+_ORIGINAL_PROJECT_ROOT = osm_init._CODE_DIR
+osm_init.PROJECT_ROOT = _ORIGINAL_PROJECT_ROOT
 
 
 @pytest.fixture(autouse=True)
 def _isolate_codex_config(monkeypatch, tmp_path):
     """All registration and removal tests use disposable Codex configuration."""
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_retrieval_selection(monkeypatch, tmp_path):
+    """Tests start without the host's installed stack or saved retrieval backend.
+
+    src/server.py loads the installed .env at import time, so a host that chose
+    Caasiopeia leaks the selection into every test process, and osm_init reads
+    the installed stack from the default data directory. Tests that need a
+    backend or a data directory set it themselves with monkeypatch.setenv.
+    """
+    monkeypatch.setenv("OSM_DATA_DIR", str(tmp_path / "osm-data"))
+    for name in list(os.environ):
+        if name in ("OSM_RETRIEVAL_BACKEND", "OSM_CAASIOPEIA_HOST_URL") or name.startswith("CAASIOPEIA_"):
+            monkeypatch.delenv(name)
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +82,7 @@ def _isolate_osm_config_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(osm_init, "OSM_CONFIG_DIR", fake_config, raising=False)
     from src import launcher
     monkeypatch.setattr(launcher, "OSM_CONFIG_DIR", fake_config)
+    monkeypatch.setattr(launcher, "PROJECT_ROOT_FILE", fake_config / "project_root")
     # PROJECT_ROOT_FILE is derived from OSM_CONFIG_DIR at import time
     # (osm_init.py:311), so repointing the directory alone leaves the
     # already-computed file path aimed at the real config dir. Patch the
@@ -70,6 +90,11 @@ def _isolate_osm_config_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(
         osm_init, "PROJECT_ROOT_FILE", fake_config / "project_root", raising=False
     )
+    # The dashboard token path is a second import-time derivative of the real
+    # config dir; leaving it aimed there makes tests read and write the host's
+    # real token (issue #81).
+    monkeypatch.setattr(osm_init, "_OSM_CONFIG_DIR", fake_config)
+    monkeypatch.setattr(osm_init, "_DASHBOARD_TOKEN_FILE", fake_config / "dashboard_token")
 
     # Force re-resolution against the fake dir rather than reusing whatever a
     # previous test cached.
