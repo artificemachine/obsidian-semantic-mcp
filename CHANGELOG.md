@@ -454,3 +454,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - 2026-10-07: feat(setup): persist native retrieval settings without credentials, retain legacy runtime compatibility and validate effective retrieval configuration before launch.
 - 2026-10-07: test: isolate the suite from the host's installed stack, saved retrieval selection and config pointers (#81).
+- 2026-10-07: docs: record the Caasiopeia live-check plan and the Obsidian desktop CLI unavailability report with its URI fallback.
