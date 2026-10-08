@@ -160,9 +160,22 @@ def test_compose_helper_passes_through_check_kwarg():
     assert sig.parameters["capture"].default is False
 
 
+LIVE_STACK_OPT_IN = "OSM_LIVE_STACK_TESTS"
+
+
+def _require_live_stack_opt_in():
+    """Skip unless the owner asked for tests that touch the installed stack (issue #81)."""
+    if os.environ.get(LIVE_STACK_OPT_IN) != "1":
+        pytest.skip(
+            f"live stack test: set {LIVE_STACK_OPT_IN}=1 to run docker compose exec "
+            "against the installed stack"
+        )
+
+
 def test_docker_exec_smoke_against_live_mcp_server():
     """Verifies the docker-exec delegation that `osm migrate` uses, against
-    the live stack. Auto-skipped when the mcp-server container is unreachable.
+    the live stack. Runs only with OSM_LIVE_STACK_TESTS=1, and is auto-skipped
+    when the mcp-server container is unreachable.
 
     This is the proof that the preconditions for test_osm_migrate_subcommand_is_registered
     were met on 2026-07-21. The actual docker-exec ran:
@@ -174,6 +187,7 @@ def test_docker_exec_smoke_against_live_mcp_server():
     import subprocess
     from pathlib import Path
 
+    _require_live_stack_opt_in()
     if not shutil.which("docker"):
         pytest.skip("docker not on PATH")
     deploy_dir = Path("~/.local/share/obsidian-semantic-mcp").expanduser()
