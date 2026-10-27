@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp==2.0.0",
-    "psycopg2-binary==2.9.12",
+    "psycopg2-binary==2.9.13",
     "watchdog==6.0.0",
     "requests==2.34.2",
     "pyjwt==2.13.0",
