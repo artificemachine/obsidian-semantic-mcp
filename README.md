@@ -114,7 +114,7 @@ powershell -c "irm https://raw.githubusercontent.com/artificemachine/obsidian-se
 
 The bootstrap installers clone into the local data directory, create a PATH shim for `osm`, and launch the wizard.
 
-The wizard detects your OS and asks which installation mode you want:
+The interactive setup wizard was inspired by the wizard in [Nous Research's Hermes Agent](https://github.com/nousresearch/hermes-agent). It detects your OS and asks which installation mode you want:
 
 **macOS:**
 ```

@@ -457,3 +457,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 2026-10-08: test: guard that every module-level constant derived from the user's home is isolated in tests/conftest.py (follow-up to #81).
 - 2026-10-08: test: name the scanned-only guard test for what it checks and state that the guard's module lists are hand-written.
 - 2026-10-08: test: the live-stack docker exec smoke test runs only with OSM_LIVE_STACK_TESTS=1 (follow-up to #81).
+- 2026-11-05: docs(setup): credit Nous Research Hermes Agent as inspiration for the interactive setup wizard.
