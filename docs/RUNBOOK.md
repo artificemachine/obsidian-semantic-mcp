@@ -67,8 +67,8 @@ docker compose ps postgres
 # Test connection from host
 psql -h 127.0.0.1 -p 5433 -U obsidian -d obsidian_brain -c "SELECT 1"
 
-# Check password
-grep POSTGRES_PASSWORD .env
+# Check deployment configuration and service health without printing credentials
+osm status
 ```
 
 **Reset from scratch:**
@@ -83,8 +83,8 @@ docker compose up -d     # Re-creates DB, re-indexes vault
 # Check dashboard container
 docker compose logs dashboard --tail 20
 
-# Check if dashboard can reach postgres
-docker exec obsidian-semantic-mcp-dashboard-1 python3 -c "from config import build_dsn; print(build_dsn())"
+# Check dashboard health without printing the database connection string
+osm status
 
 # Restart dashboard only
 docker compose restart dashboard

@@ -4,6 +4,13 @@
 
 Obsidian Semantic MCP is a local-first semantic memory layer for Claude Desktop. It indexes your Obsidian vault as vector embeddings and exposes search + CRUD via the Model Context Protocol (MCP). Ollama may run either on the host or in Docker depending on the selected install mode.
 
+The component map and SQL search flow below describe the default `local`
+retrieval backend. With `OSM_RETRIEVAL_BACKEND=caasiopeia`, `search_vault`
+delegates ranking to CaaSiopeia through the configured source map; vault file
+tools still operate directly on the filesystem. See
+[the retrieval architecture](ARCH-caasiopeia-obsidian-tessera-relations.md)
+for source mapping, provenance, and fallback behavior.
+
 ## Component Map
 
 ```
@@ -18,6 +25,7 @@ src/server.py  ─────────────────────�
     ├── list_files()        filesystem directory listing              │
     ├── get_file()          direct filesystem read                    │
     ├── get_files_batch()   parallel filesystem reads                 │
+    ├── get_note_connections() wikilink graph query                    │
     ├── append_content()    filesystem append                         │
     ├── write_file()        filesystem write (vault-root enforced)    │
     ├── recent_changes()    mtime-sorted filesystem scan              │
@@ -55,7 +63,7 @@ The file watcher gives sub-second re-indexing on note saves without polling. The
 
 ### Why a unified server (search + CRUD in one process)?
 
-Separating search and CRUD into two MCP servers would require Claude to switch contexts mid-conversation. A single server exposes all 10 tools under one MCP namespace, making it simpler to configure in `claude_desktop_config.json`.
+Separating search and CRUD into two MCP servers would require Claude to switch contexts mid-conversation. A single server exposes search, file, indexing, and note-connection tools under one MCP namespace, making it simpler to configure in `claude_desktop_config.json`. The authoritative tool list is `list_tools()` in `src/server.py`.
 
 ### Why ThreadedConnectionPool instead of async DB?
 

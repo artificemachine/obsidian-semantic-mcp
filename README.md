@@ -23,7 +23,8 @@ AI assistants forget everything between sessions. You repeat context, lose conti
 - Provides full vault CRUD (read, write, search, list) — works even when Obsidian is closed
 - Exposes everything through MCP so Claude can retrieve and manage vault content on the fly
 
-No cloud services. No API keys. Everything runs locally.
+The default local retrieval backend needs no cloud service or API key. Optional
+CaaSiopeia retrieval uses a separately configured endpoint and API key.
 
 ## Quick Start
 
@@ -52,7 +53,7 @@ uv run osm dashboard
 ```
 
 > The commands above use `--mode 3` (macOS). On Linux/Windows use `--mode 2`.
-> Already running Ollama locally? Use `--mode 4` (Docker + host Ollama) to skip re-downloading the Ollama image and model.
+> Already running Ollama locally? Use `--mode 2` on macOS or `--mode 1` on Linux/Windows (Docker + host Ollama) to skip re-downloading the Ollama image and model. Remote Ollama is mode 4 on macOS or mode 3 on Linux/Windows.
 > `--mode 1` is a **native** (non-Docker) macOS install — only pick it if you specifically want Postgres and the server running outside containers.
 > For ephemeral/CI setups, use `--no-persistent` instead.
 
@@ -305,7 +306,7 @@ Use `osm` to set up, manage, and tear down the stack. The wizard installs all pr
 | `osm remove --yes` | Non-interactive teardown (agent/script friendly) |
 | `osm help` | Full flag reference |
 
-**`osm init` flags:** `--mode`, `--vault`, `--pg-password`, `--persistent` / `--no-persistent`, `--data-dir`, `--ssh-host`, `--ssh-user`, `--ssh-port`, `--ssh-key`, `--vault-remote`
+**`osm init` flags:** `--mode`, `--vault`, `--pg-password`, `--persistent` / `--no-persistent`, `--data-dir`, `--ssh-host`, `--ssh-user`, `--ssh-port`, `--ssh-key`, `--vault-remote`, `--retrieval-backend` (`local` or `caasiopeia`)
 
 `osm status` probes both Ollama reachability (`/api/tags`) and embeddings (`/api/embeddings`) so it can catch the case where the daemon is up but model execution is broken.
 
